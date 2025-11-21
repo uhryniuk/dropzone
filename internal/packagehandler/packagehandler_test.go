@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/dropzone/internal/builder"
+	"github.com/dropzone/internal/config"
+	"github.com/dropzone/internal/controlplane"
 	"github.com/dropzone/internal/hostintegration"
 	"github.com/dropzone/internal/localstore"
 	"github.com/dropzone/internal/util"
@@ -48,7 +50,10 @@ func setupHandler(t *testing.T, mockRuntimePath string) (*PackageHandler, *local
 
 	b := builder.New(mockRuntimePath)
 
-	return New(store, integrator, b), store, integrator
+	cfg, _ := config.DefaultConfig()
+	cpManager, _ := controlplane.NewManager(cfg, store)
+
+	return New(store, integrator, b, cpManager), store, integrator
 }
 
 func TestBuildPackage(t *testing.T) {
@@ -218,5 +223,85 @@ func TestRemovePackage_Interactive(t *testing.T) {
 	// We removed v1 (1.0.0), so v2 should remain
 	if versions[0].Version != v2 {
 		t.Errorf("Expected remaining version to be %s, got %s", v2, versions[0].Version)
+	}
+}
+
+// mockCP implements ControlPlane for testing InstallPackage
+type mockCP struct {
+	name string
+	pkgs map[string]localstore.PackageMetadata
+}
+
+func (m *mockCP) Name() string                      { return m.name }
+func (m *mockCP) Type() string                      { return "mock-cp" }
+func (m *mockCP) Endpoint() string                  { return "mock://endpoint" }
+func (m *mockCP) Authenticate(u, p, t string) error { return nil }
+func (m *mockCP) ListPackageNames() ([]string, error) {
+	var names []string
+	for k := range m.pkgs {
+		names = append(names, k)
+	}
+	return names, nil
+}
+func (m *mockCP) GetPackageTags(packageName string) ([]string, error) {
+	if p, ok := m.pkgs[packageName]; ok {
+		return []string{p.Version}, nil
+	}
+	return nil, nil
+}
+func (m *mockCP) GetPackageMetadata(packageName, tag string) (*localstore.PackageMetadata, error) {
+	if p, ok := m.pkgs[packageName]; ok {
+		// Return copy
+		return &p, nil
+	}
+	return nil, nil
+}
+func (m *mockCP) DownloadArtifact(packageName, tag, destinationPath string) error {
+	// Create bin directory and file
+	binDir := filepath.Join(destinationPath, "bin")
+	os.MkdirAll(binDir, 0755)
+	os.WriteFile(filepath.Join(binDir, packageName), []byte("content"), 0755)
+	return nil
+}
+
+func TestInstallPackage(t *testing.T) {
+	// Register mock factory
+	controlplane.RegisterFactory("mock-cp", func(cfg config.ControlPlaneConfig) (controlplane.ControlPlane, error) {
+		return &mockCP{
+			name: cfg.Name,
+			pkgs: map[string]localstore.PackageMetadata{
+				"remotePkg": {
+					Name:       "remotePkg",
+					Version:    "1.0.0",
+					SourceRepo: cfg.Name,
+					Checksum:   "dummy", // Will cause checksum mismatch
+				},
+			},
+		}, nil
+	})
+
+	h, _, _ := setupHandler(t, "/bin/true")
+
+	// Add repo
+	err := h.cpManager.Add("test-repo", "mock-cp", "mock://endpoint", config.AuthOptions{})
+	if err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Update index
+	if err := h.cpManager.UpdateAll(); err != nil {
+		t.Fatalf("UpdateAll failed: %v", err)
+	}
+
+	// Install
+	// We expect failure due to attestation verification (checksum mismatch/no signature)
+	err = h.InstallPackage("remotePkg:1.0.0")
+	if err == nil {
+		t.Fatal("Expected InstallPackage to fail due to attestation verification (mock), but succeeded")
+	}
+
+	// Check if error is about attestation
+	if !strings.Contains(err.Error(), "attestation verification failed") {
+		t.Errorf("Expected attestation error, got: %v", err)
 	}
 }

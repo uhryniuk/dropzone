@@ -11,6 +11,7 @@ import (
 
 	"github.com/dropzone/internal/attestation"
 	"github.com/dropzone/internal/builder"
+	"github.com/dropzone/internal/controlplane"
 	"github.com/dropzone/internal/hostintegration"
 	"github.com/dropzone/internal/localstore"
 	"github.com/dropzone/internal/util"
@@ -21,14 +22,16 @@ type PackageHandler struct {
 	store      *localstore.LocalStore
 	integrator *hostintegration.HostIntegrator
 	builder    *builder.Builder
+	cpManager  *controlplane.Manager
 }
 
 // New creates a new PackageHandler.
-func New(store *localstore.LocalStore, integrator *hostintegration.HostIntegrator, builder *builder.Builder) *PackageHandler {
+func New(store *localstore.LocalStore, integrator *hostintegration.HostIntegrator, builder *builder.Builder, cpManager *controlplane.Manager) *PackageHandler {
 	return &PackageHandler{
 		store:      store,
 		integrator: integrator,
 		builder:    builder,
+		cpManager:  cpManager,
 	}
 }
 
@@ -86,6 +89,116 @@ func (h *PackageHandler) BuildPackage(packageName, dockerfilePath, buildContextP
 	util.LogInfo("Package built and stored successfully at %s", finalPath)
 	util.LogInfo("To install, run: dropzone install %s:%s", packageName, packageVersion)
 	return nil
+}
+
+// InstallPackage installs a care package from a control plane.
+func (h *PackageHandler) InstallPackage(packageRef string) error {
+	packageName, requestedTag := parsePackageRef(packageRef)
+
+	// 1. Check if already installed (optional for MVP, user might want to reinstall/upgrade)
+
+	util.LogInfo("Resolving package '%s'...", packageRef)
+
+	// 2. Find package in available indexes
+	available, err := h.store.GetAllAvailablePackagesFromIndexes()
+	if err != nil {
+		return fmt.Errorf("failed to list available packages: %w", err)
+	}
+
+	var candidate *localstore.PackageMetadata
+	var versions []string
+
+	for _, pkg := range available {
+		if pkg.Name == packageName {
+			versions = append(versions, pkg.Version)
+			// Match logic:
+			// If tag requested, match exact.
+			// If no tag, find latest (simple string compare or just pick first for MVP logic if not sorted/semver).
+			if requestedTag != "" {
+				if pkg.Version == requestedTag {
+					p := pkg
+					candidate = &p
+					break
+				}
+			} else {
+				// Pick "latest" - for MVP let's pick the last one found or rely on source order
+				// Real logic should use semver sorting.
+				p := pkg
+				candidate = &p
+			}
+		}
+	}
+
+	if candidate == nil {
+		if len(versions) > 0 {
+			return fmt.Errorf("package '%s' found but version '%s' not available. Available versions: %v", packageName, requestedTag, versions)
+		}
+		return fmt.Errorf("package '%s' not found in any repository. Try running 'dropzone update'", packageName)
+	}
+
+	util.LogInfo("Found %s:%s in repo '%s'", candidate.Name, candidate.Version, candidate.SourceRepo)
+
+	// 3. Get Control Plane
+	cp, err := h.cpManager.Get(candidate.SourceRepo)
+	if err != nil {
+		return fmt.Errorf("failed to get control plane '%s': %w", candidate.SourceRepo, err)
+	}
+
+	// 4. Download Artifact
+	tmpDir, err := os.MkdirTemp("", "dropzone-install-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	util.LogInfo("Downloading package artifact...")
+	if err := cp.DownloadArtifact(candidate.Name, candidate.Version, tmpDir); err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+
+	// 5. Verify Checksum/Attestation
+	util.LogInfo("Verifying attestation...")
+	if err := attestation.VerifySignedChecksum(tmpDir, candidate.Checksum, candidate.Signature, candidate.PublicKey); err != nil {
+		return fmt.Errorf("attestation verification failed: %w", err)
+	}
+	util.LogInfo("Attestation verified successfully.")
+
+	// 6. Store Package
+	util.LogInfo("Installing package files...")
+	installPath, err := h.store.StorePackage(candidate.Name, candidate.Version, tmpDir)
+	if err != nil {
+		return fmt.Errorf("failed to store package: %w", err)
+	}
+
+	// 7. Store Metadata
+	candidate.InstallDate = time.Now()
+	if err := h.store.StorePackageMetadata(*candidate); err != nil {
+		return fmt.Errorf("failed to store metadata: %w", err)
+	}
+
+	// 8. Link Binaries (Host Integration)
+	util.LogInfo("Linking binaries...")
+	linked, err := h.integrator.LinkPackageBinaries(candidate.Name, candidate.Version, installPath)
+	if err != nil {
+		util.LogInfo("Warning: failed to link binaries: %v", err)
+	} else {
+		if len(linked) > 0 {
+			util.LogInfo("Linked binaries: %v", linked)
+		} else {
+			util.LogInfo("No binaries linked.")
+		}
+	}
+
+	util.LogInfo("Successfully installed %s:%s", candidate.Name, candidate.Version)
+	return nil
+}
+
+func parsePackageRef(ref string) (string, string) {
+	parts := strings.Split(ref, ":")
+	if len(parts) > 1 {
+		return parts[0], parts[1]
+	}
+	return parts[0], ""
 }
 
 // ListPackages displays installed and available packages.
