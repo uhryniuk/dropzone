@@ -3,7 +3,9 @@ package app
 import (
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/dropzone/internal/config"
 	"github.com/dropzone/internal/util"
 	"github.com/spf13/cobra"
 )
@@ -57,12 +59,16 @@ func (a *App) newAddRepoCommand() *cobra.Command {
 				return fmt.Errorf("unsupported repository type: %s. Supported: oci, github, s3", repoType)
 			}
 
-			// In a real implementation, we would construct the auth options
-			// and call controlplane.Manager.Add()
-			// For CLI foundation, we log the intent.
-			util.LogInfo("Adding repo '%s' (%s) at %s", name, repoType, endpoint)
-			if username != "" {
-				util.LogInfo("With username: %s", username)
+			auth := config.AuthOptions{
+				Username:  username,
+				Password:  password,
+				Token:     token,
+				AccessKey: accessKey,
+				SecretKey: secretKey,
+			}
+
+			if err := a.CPManager.Add(name, repoType, endpoint, auth); err != nil {
+				return err
 			}
 			return nil
 		},
@@ -88,11 +94,24 @@ func (a *App) newBuildCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			packageName := args[0]
 			dockerfilePath := args[1]
-			util.LogInfo("Building package '%s' from %s", packageName, dockerfilePath)
-			if contextPath != "" {
-				util.LogInfo("Context: %s", contextPath)
+
+			bArgsMap := make(map[string]string)
+			for _, arg := range buildArgs {
+				parts := strings.SplitN(arg, "=", 2)
+				if len(parts) == 2 {
+					bArgsMap[parts[0]] = parts[1]
+				}
 			}
-			return nil
+
+			envMap := make(map[string]string)
+			for _, env := range envVars {
+				parts := strings.SplitN(env, "=", 2)
+				if len(parts) == 2 {
+					envMap[parts[0]] = parts[1]
+				}
+			}
+
+			return a.PackageHandler.BuildPackage(packageName, dockerfilePath, contextPath, bArgsMap, envMap)
 		},
 	}
 	cmd.Flags().StringVar(&contextPath, "context", ".", "Build context path")
@@ -109,8 +128,7 @@ func (a *App) newInstallCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			packageRef := args[0]
-			util.LogInfo("Installing package '%s'", packageRef)
-			return nil
+			return a.PackageHandler.InstallPackage(packageRef)
 		},
 	}
 }
@@ -123,14 +141,7 @@ func (a *App) newListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List installed and available packages",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			util.LogInfo("Listing packages...")
-			if installedOnly {
-				util.LogInfo("Filter: Installed only")
-			}
-			if availableOnly {
-				util.LogInfo("Filter: Available only")
-			}
-			return nil
+			return a.PackageHandler.ListPackages(installedOnly, availableOnly, repoName, packageName)
 		},
 	}
 	cmd.Flags().BoolVar(&installedOnly, "installed", false, "Show only installed packages")
@@ -148,8 +159,13 @@ func (a *App) newRemoveCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			packageRef := args[0]
-			util.LogInfo("Removing package '%s'", packageRef)
-			return nil
+			parts := strings.Split(packageRef, ":")
+			packageName := parts[0]
+			version := ""
+			if len(parts) > 1 {
+				version = parts[1]
+			}
+			return a.PackageHandler.RemovePackage(packageName, version)
 		},
 	}
 }
@@ -159,7 +175,10 @@ func (a *App) newUpdateCommand() *cobra.Command {
 		Use:   "update",
 		Short: "Update package indexes from control planes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			util.LogInfo("Updating control plane indexes...")
+			if err := a.CPManager.UpdateAll(); err != nil {
+				return err
+			}
+			util.LogInfo("Update complete.")
 			return nil
 		},
 	}
@@ -183,8 +202,8 @@ func (a *App) newTagsCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			packageName := args[0]
-			util.LogInfo("Listing tags for '%s'", packageName)
-			return nil
+			// Use ListPackages to show available versions
+			return a.PackageHandler.ListPackages(false, true, repoName, packageName)
 		},
 	}
 	cmd.Flags().StringVar(&repoName, "repo", "", "Filter by repository")

@@ -4,16 +4,25 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/dropzone/internal/builder"
 	"github.com/dropzone/internal/config"
+	"github.com/dropzone/internal/controlplane"
+	_ "github.com/dropzone/internal/controlplane/oci" // Register OCI factory
+	"github.com/dropzone/internal/hostintegration"
 	"github.com/dropzone/internal/localstore"
+	"github.com/dropzone/internal/packagehandler"
 	"github.com/dropzone/internal/util"
 )
 
 // App holds the application context and core services.
 type App struct {
-	Config     *config.Config
-	LocalStore *localstore.LocalStore
-	ConfigPath string
+	Config         *config.Config
+	LocalStore     *localstore.LocalStore
+	HostIntegrator *hostintegration.HostIntegrator
+	Builder        *builder.Builder
+	CPManager      *controlplane.Manager
+	PackageHandler *packagehandler.PackageHandler
+	ConfigPath     string
 }
 
 // New creates a new App instance.
@@ -44,6 +53,26 @@ func (a *App) Initialize() error {
 	if err := a.LocalStore.Init(); err != nil {
 		return fmt.Errorf("failed to initialize local store: %w", err)
 	}
+
+	// Initialize Host Integrator
+	a.HostIntegrator = hostintegration.New(cfg.LocalStorePath)
+	if err := a.HostIntegrator.SetupDropzoneBinPath(); err != nil {
+		util.LogDebug("Failed to setup bin path: %v", err)
+		// Continue, as this might be just about PATH advice
+	}
+
+	// Initialize Builder
+	a.Builder = builder.New(cfg.ActiveContainerRuntime)
+
+	// Initialize Control Plane Manager
+	cpManager, err := controlplane.NewManager(a.Config, a.LocalStore)
+	if err != nil {
+		return fmt.Errorf("failed to initialize control plane manager: %w", err)
+	}
+	a.CPManager = cpManager
+
+	// Initialize Package Handler
+	a.PackageHandler = packagehandler.New(a.LocalStore, a.HostIntegrator, a.Builder, a.CPManager)
 
 	// If config file doesn't exist, save the defaults to it.
 	// We do this after LocalStore.Init because it ensures the directory structure exists.
