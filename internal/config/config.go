@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/util"
 	"gopkg.in/yaml.v3"
 )
 

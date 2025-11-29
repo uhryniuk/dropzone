@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/dropzone/internal/config"
-	"github.com/dropzone/internal/localstore"
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/config"
+	"github.com/uhryniuk/dropzone/internal/localstore"
+	"github.com/uhryniuk/dropzone/internal/util"
 )
 
 // ControlPlane defines the interface for remote package repositories.

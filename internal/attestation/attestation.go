@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/util"
 )
 
 // GenerateChecksum calculates a SHA256 checksum for a file or a directory.

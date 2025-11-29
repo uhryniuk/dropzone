@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dropzone/internal/config"
-	"github.com/dropzone/internal/controlplane"
-	"github.com/dropzone/internal/localstore"
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/config"
+	"github.com/uhryniuk/dropzone/internal/controlplane"
+	"github.com/uhryniuk/dropzone/internal/localstore"
+	"github.com/uhryniuk/dropzone/internal/util"
 )
 
 func init() {

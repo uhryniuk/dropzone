@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/util"
 )
 
 func setupTestStore(t *testing.T) *LocalStore {

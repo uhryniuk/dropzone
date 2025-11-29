@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/util"
 )
 
 // PackageMetadata represents metadata about an installed care package.

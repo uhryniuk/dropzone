@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dropzone/internal/app"
+	"github.com/uhryniuk/dropzone/internal/app"
 )
 
 func main() {

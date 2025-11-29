@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dropzone/internal/config"
-	"github.com/dropzone/internal/localstore"
+	"github.com/uhryniuk/dropzone/internal/config"
+	"github.com/uhryniuk/dropzone/internal/localstore"
 )
 
 // mockControlPlane implements ControlPlane for testing.

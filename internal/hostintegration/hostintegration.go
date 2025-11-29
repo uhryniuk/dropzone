@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/util"
 )
 
 // HostIntegrator manages the integration with the host system.

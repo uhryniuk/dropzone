@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dropzone/internal/config"
+	"github.com/uhryniuk/dropzone/internal/config"
 )
 
 func TestDownloadFile_Success(t *testing.T) {

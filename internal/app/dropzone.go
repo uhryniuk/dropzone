@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/dropzone/internal/builder"
-	"github.com/dropzone/internal/config"
-	"github.com/dropzone/internal/controlplane"
-	_ "github.com/dropzone/internal/controlplane/oci" // Register OCI factory
-	"github.com/dropzone/internal/hostintegration"
-	"github.com/dropzone/internal/localstore"
-	"github.com/dropzone/internal/packagehandler"
-	"github.com/dropzone/internal/util"
+	"github.com/uhryniuk/dropzone/internal/builder"
+	"github.com/uhryniuk/dropzone/internal/config"
+	"github.com/uhryniuk/dropzone/internal/controlplane"
+	_ "github.com/uhryniuk/dropzone/internal/controlplane/oci" // Register OCI factory
+	"github.com/uhryniuk/dropzone/internal/hostintegration"
+	"github.com/uhryniuk/dropzone/internal/localstore"
+	"github.com/uhryniuk/dropzone/internal/packagehandler"
+	"github.com/uhryniuk/dropzone/internal/util"
 )
 
 // App holds the application context and core services.
