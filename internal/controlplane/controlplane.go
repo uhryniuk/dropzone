@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"sync"
 
@@ -133,6 +134,34 @@ func (m *Manager) Add(name, cpType, endpoint string, auth config.AuthOptions) er
 	m.instances[name] = instance
 	util.LogInfo("Control plane '%s' added successfully.", name)
 	return nil
+}
+
+// AddFromGitHubUser registers a new control plane for a GitHub user's care-package repository.
+func (m *Manager) AddFromGitHubUser(username string, auth config.AuthOptions) error {
+	repoURL := fmt.Sprintf("https://github.com/%s/care-package", username)
+
+	// Verify existence
+	req, err := http.NewRequest("GET", repoURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if auth.Token != "" {
+		req.Header.Set("Authorization", "token "+auth.Token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to verify repository existence: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("repository '%s/care-package' not found or not accessible (status: %d)", username, resp.StatusCode)
+	}
+
+	endpoint := fmt.Sprintf("github://%s/care-package", username)
+	return m.Add(username, "github", endpoint, auth)
 }
 
 // Get retrieves a control plane instance.

@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/uhryniuk/dropzone/internal/config"
 	"github.com/uhryniuk/dropzone/internal/util"
-	"github.com/spf13/cobra"
 )
 
 // SetupCommands configures the CLI commands.
@@ -46,10 +46,37 @@ func (a *App) newAddRepoCommand() *cobra.Command {
 	var username, password, token, accessKey, secretKey string
 
 	cmd := &cobra.Command{
-		Use:   "repo <name> <type> <endpoint>",
+		Use:   "repo <name> <type> <endpoint> OR repo <github-username>",
 		Short: "Add a new control plane repository",
-		Args:  cobra.ExactArgs(3),
+		Args:  cobra.RangeArgs(1, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			auth := config.AuthOptions{
+				Username:  username,
+				Password:  password,
+				Token:     token,
+				AccessKey: accessKey,
+				SecretKey: secretKey,
+			}
+
+			// Smart Add: GitHub User Discovery
+			if len(args) == 1 {
+				username := args[0]
+				// Basic heuristic: check if it looks like a username (no slashes or protocols)
+				if !strings.Contains(username, "/") && !strings.Contains(username, ":") {
+					util.LogInfo("Attempting to discover care-package repository for GitHub user '%s'...", username)
+					if err := a.CPManager.AddFromGitHubUser(username, auth); err != nil {
+						return fmt.Errorf("failed to add GitHub user repo: %w", err)
+					}
+					return nil
+				}
+				return fmt.Errorf("invalid argument: expected <name> <type> <endpoint> or <github-username>")
+			}
+
+			// Explicit Add
+			if len(args) != 3 {
+				return fmt.Errorf("accepts 1 arg (github user) or 3 args (name, type, endpoint), received %d", len(args))
+			}
+
 			name := args[0]
 			repoType := args[1]
 			endpoint := args[2]
@@ -57,14 +84,6 @@ func (a *App) newAddRepoCommand() *cobra.Command {
 			// Validate type (MVP supports OCI)
 			if repoType != "oci" && repoType != "github" && repoType != "s3" {
 				return fmt.Errorf("unsupported repository type: %s. Supported: oci, github, s3", repoType)
-			}
-
-			auth := config.AuthOptions{
-				Username:  username,
-				Password:  password,
-				Token:     token,
-				AccessKey: accessKey,
-				SecretKey: secretKey,
 			}
 
 			if err := a.CPManager.Add(name, repoType, endpoint, auth); err != nil {
