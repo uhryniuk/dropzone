@@ -31,6 +31,7 @@ The MVP focuses on the core functionality required to establish `dropzone` as a 
 *   **Dockerfile/Containerfile as Package Definition**: The primary format for defining care packages, specifying build steps and final artifact layout.
 *   **Host System Integration**: Care packages are integrated into the host's PATH via symbolic links from a `dropzone`-managed directory (`~/.dropzone/bin`).
 *   **Control Planes (Decentralized Repositories)**: User-defined remote sources for discovering and distributing care packages (OCI registries, GitHub Releases, S3 buckets). **MVP includes support for authentication for private OCI registries.**
+*   **GitHub User Discovery**: Users can simply provide a GitHub username (e.g., `dropzone add repo <username>`). Dropzone will automatically discover care packages in that user's `care-package` repository (via Releases or GHCR).
 *   **Attestation (Signed Checksums)**: Care packages downloaded from control planes *must* be accompanied by and verified against cryptographically signed checksums to ensure both integrity and authenticity.
 *   **Binary Conflict Resolution**: During installation, `dropzone` will detect and provide a clear, predictable mechanism for handling conflicts when multiple packages attempt to install binaries with the same name.
 *   **Custom Build Arguments**: Users creating care packages can pass custom arguments/environment variables to the underlying `docker build` or `podman build` command.
@@ -127,6 +128,7 @@ Users can add new control planes to their `dropzone` client:
 dropzone add repo my-registry oci://myregistry.example.com/dropzone-packages [--username <user>] [--password <pass>|--token <token>]
 dropzone add repo my-gh-releases github://myorg/myrepo/releases [--token <token>]
 dropzone add repo my-s3 s3://my-dropzone-bucket/packages [--access-key <key>] [--secret-key <secret>]
+dropzone add repo <github-username> # Auto-discovers <github-username>/care-package
 ```
 
 The `dropzone update` command would then poll all configured repositories to check for updates:

@@ -7,7 +7,8 @@ import (
 	"github.com/uhryniuk/dropzone/internal/builder"
 	"github.com/uhryniuk/dropzone/internal/config"
 	"github.com/uhryniuk/dropzone/internal/controlplane"
-	_ "github.com/uhryniuk/dropzone/internal/controlplane/oci" // Register OCI factory
+	_ "github.com/uhryniuk/dropzone/internal/controlplane/github" // Register GitHub factory
+	_ "github.com/uhryniuk/dropzone/internal/controlplane/oci"    // Register OCI factory
 	"github.com/uhryniuk/dropzone/internal/hostintegration"
 	"github.com/uhryniuk/dropzone/internal/localstore"
 	"github.com/uhryniuk/dropzone/internal/packagehandler"

@@ -67,6 +67,12 @@ func GetHomeDir() (string, error) {
 	return os.UserHomeDir()
 }
 
+// CreateTempFile creates a temporary file with the given pattern.
+// Caller is responsible for cleaning it up.
+func CreateTempFile(pattern string) (*os.File, error) {
+	return os.CreateTemp("", pattern)
+}
+
 // Basic logging interface
 
 // LogInfo prints an informational message to stdout.

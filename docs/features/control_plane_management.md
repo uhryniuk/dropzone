@@ -4,11 +4,14 @@
 
 This document describes the design and implementation for `dropzone`'s decentralized control plane management. This feature allows users to add, track, and update information from various remote repositories (control planes) that host care package artifacts. By supporting diverse repository types like OCI registries, GitHub Releases, and S3 buckets, `dropzone` empowers users to leverage existing distribution channels, **including private repositories that require authentication**.
 
+**Additionally, `dropzone` streamlines the experience for GitHub users by automatically discovering care packages from a user's dedicated `care-package` repository.**
+
 ## 2. Goals
 
 *   Enable users to define and manage multiple decentralized care package sources.
 *   Support various common artifact distribution methods (OCI registries, GitHub, S3).
 *   **Provide robust mechanisms for authenticating with private control planes.**
+*   **Simplify repository addition for GitHub users via convention-based discovery (e.g., `<username>/care-package`).**
 *   Provide a mechanism to refresh the local cache of available packages and their versions/tags from configured control planes.
 *   Ensure robust and extensible handling of different control plane types.
 *   Provide clear feedback to the user on the status of control planes and available packages.
@@ -31,6 +34,7 @@ This document describes the design and implementation for `dropzone`'s decentral
     *   **`Manager` Struct:**
         *   Manages a collection of registered `ControlPlane` implementations.
         *   `Add(name, type, endpoint string, authOpts AuthOptions)`: Registers a new control plane, storing its configuration (including encrypted authentication details) in `internal/config`. Instantiates the correct `ControlPlane` implementation.
+        *   **`AddFromGitHubUser(username string, authOpts AuthOptions)` (New):** Convenience method. Checks for `<username>/care-package` on GitHub. If found, adds it as a GitHub-type control plane using the releases endpoint.
         *   `Remove(name string)`: Deregisters a control plane.
         *   `List() []ControlPlane`: Returns all registered control planes.
         *   `Get(name string) (ControlPlane, error)`: Retrieves a specific registered control plane.
@@ -91,12 +95,16 @@ This document describes the design and implementation for `dropzone`'s decentral
 
 ## 4. `dropzone` CLI Integration
 
-*   **`dropzone add repo <name> <type> <endpoint> [--username <user>] [--password <pass>] [--token <token>] [--access-key <key>] [--secret-key <secret>]`:**
+*   **`dropzone add repo <name> <type> <endpoint> [--username <user>] ...`** (Explicit):
     *   Invokes `controlplane.Manager.Add` to register the new repository.
     *   Validates the `<type>` and `<endpoint>` format.
     *   **Collects authentication arguments and passes them to the `Manager.Add` function for storage and initial authentication.**
     *   If sensitive credentials are provided on the CLI, `dropzone` should prompt the user for confirmation and offer to encrypt them in the config file.
     *   Persists the control plane configuration via `internal/config`.
+*   **`dropzone add repo <github-username> [--token <token>]`** (Discovery):
+    *   **Simplified GitHub Discovery:** If a single argument is provided and it looks like a username (not a URL/URI), `dropzone` invokes `controlplane.Manager.AddFromGitHubUser`.
+    *   It verifies the existence of `https://github.com/<username>/care-package`.
+    *   If successful, it registers a control plane named `<username>` of type `github` pointing to the `care-package` repository.
 *   **`dropzone login <repo-name> [--username <user>] [--password <pass>] [--token <token>]`:** (Alternative/explicit authentication)
     *   Allows users to explicitly log in or update credentials for an *already added* control plane.
     *   Invokes `controlplane.Manager.Get(repo-name).Authenticate()` with the provided credentials.
