@@ -93,7 +93,7 @@ func startFake(t *testing.T, f *fakeRegistry) (*Client, *Registry) {
 	t.Cleanup(srv.Close)
 
 	host := strings.TrimPrefix(srv.URL, "http://")
-	client := NewClient().WithTransport(srv.Client().Transport)
+	client := NewClient("").WithTransport(srv.Client().Transport)
 	reg := &Registry{Name: "fake", URL: host}
 	return client, reg
 }
@@ -142,7 +142,7 @@ func TestClientCatalogNamespaceFilter(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	host := strings.TrimPrefix(srv.URL, "http://")
-	client := NewClient().WithTransport(srv.Client().Transport)
+	client := NewClient("").WithTransport(srv.Client().Transport)
 	reg := &Registry{Name: "fake", URL: host + "/chainguard"}
 
 	names, err := client.Catalog(context.Background(), reg)

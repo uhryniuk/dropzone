@@ -25,6 +25,7 @@ type App struct {
 	LocalStore      *localstore.LocalStore
 	HostIntegrator  *hostintegration.HostIntegrator
 	RegistryManager *registry.Manager
+	AuthStore       *registry.AuthStore
 	PackageHandler  *packagehandler.PackageHandler
 }
 
@@ -71,12 +72,14 @@ func (a *App) Initialize() error {
 	}
 
 	cacheDir := filepath.Join(cfg.LocalStorePath, "cache")
+	authPath := filepath.Join(cfg.LocalStorePath, "auth.json")
 	a.RegistryManager = registry.NewManager(
 		cfg,
 		func() error { return cfg.Save(a.ConfigPath) },
-		registry.NewClient(),
+		registry.NewClient(authPath),
 		registry.NewCache(cacheDir, registry.DefaultCacheTTL),
 	)
+	a.AuthStore = registry.NewAuthStore(authPath)
 
 	a.PackageHandler = packagehandler.New(a.LocalStore, a.HostIntegrator)
 

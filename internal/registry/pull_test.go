@@ -30,7 +30,7 @@ func startInProcessRegistry(t *testing.T) (string, *Client) {
 	srv := httptest.NewServer(gcrregistry.New())
 	t.Cleanup(srv.Close)
 	host := strings.TrimPrefix(srv.URL, "http://")
-	client := NewClient().WithTransport(srv.Client().Transport)
+	client := NewClient("").WithTransport(srv.Client().Transport)
 	return host, client
 }
 

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
@@ -19,18 +18,23 @@ import (
 // Client is a thin wrapper over google/go-containerregistry providing the
 // OCI distribution operations dropzone needs. Stateless — safe to share.
 //
-// Authentication is delegated to the user's Docker credential helpers via
-// authn.DefaultKeychain, so we never store credentials ourselves.
+// Authentication uses a chained keychain: dropzone's own ~/.dropzone/auth.json
+// is checked first, and misses fall through to authn.DefaultKeychain which
+// reads ~/.docker/config.json and any Docker credential helpers the user
+// already has configured. Users can choose either path (or both).
 type Client struct {
 	// opts lets tests inject a custom RoundTripper via WithTransport.
 	opts []gcrremote.Option
 }
 
-// NewClient builds a Client configured with the user's Docker keychain.
-func NewClient() *Client {
+// NewClient builds a Client whose keychain reads credentials from
+// authFilePath first, then from the Docker default keychain. An empty
+// authFilePath disables the dropzone tier; tests pass "" so they only
+// exercise anonymous access against their local test registries.
+func NewClient(authFilePath string) *Client {
 	return &Client{
 		opts: []gcrremote.Option{
-			gcrremote.WithAuthFromKeychain(authn.DefaultKeychain),
+			gcrremote.WithAuthFromKeychain(NewChainedKeychain(authFilePath)),
 		},
 	}
 }
