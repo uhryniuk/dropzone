@@ -6,51 +6,122 @@ import (
 	"testing"
 )
 
-// Phase 0 config tests cover the minimal placeholder schema. The richer
-// schema (DefaultRegistry, Registries, CosignPolicy) lands in Phase 1 and
-// brings its own test suite at that time.
-
-func TestDefaultConfig(t *testing.T) {
+func TestDefaultConfigSeedsChainguard(t *testing.T) {
 	cfg, err := DefaultConfig()
 	if err != nil {
 		t.Fatalf("DefaultConfig: %v", err)
 	}
-	if cfg.LocalStorePath == "" {
-		t.Error("LocalStorePath should be set by default")
+	if cfg.DefaultRegistry != "chainguard" {
+		t.Errorf("default registry: got %q, want chainguard", cfg.DefaultRegistry)
+	}
+	if len(cfg.Registries) != 1 || cfg.Registries[0].Name != "chainguard" {
+		t.Fatalf("expected one chainguard registry, got %+v", cfg.Registries)
+	}
+	if cfg.Registries[0].CosignPolicy == nil {
+		t.Fatal("chainguard registry must have a cosign policy seeded")
+	}
+	if cfg.Registries[0].CosignPolicy.IdentityRegex == "" {
+		t.Error("chainguard cosign identity_regex is empty")
 	}
 }
 
-func TestLoadAndSaveRoundTrip(t *testing.T) {
+func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "config.yaml")
-
-	// Non-existent → defaults.
-	cfg, err := Load(configFile)
+	path := filepath.Join(tmpDir, "does-not-exist.yaml")
+	cfg, err := Load(path)
 	if err != nil {
-		t.Fatalf("Load of missing file: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
+	if cfg.DefaultRegistry != "chainguard" {
+		t.Errorf("want chainguard default when file missing, got %q", cfg.DefaultRegistry)
+	}
+}
 
-	cfg.LocalStorePath = "/tmp/custom/dropzone"
-	if err := cfg.Save(configFile); err != nil {
+func TestSaveLoadRoundTripPreservesRegistries(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.yaml")
+
+	cfg, _ := DefaultConfig()
+	cfg.UpsertRegistry(RegistryConfig{
+		Name: "mycorp",
+		URL:  "registry.mycorp.example/hardened",
+		CosignPolicy: &CosignPolicy{
+			Issuer:        "https://accounts.google.com",
+			IdentityRegex: ".*@mycorp.example",
+		},
+	})
+
+	if err := cfg.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-
-	loaded, err := Load(configFile)
+	loaded, err := Load(path)
 	if err != nil {
-		t.Fatalf("Load of existing file: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if loaded.LocalStorePath != "/tmp/custom/dropzone" {
-		t.Errorf("LocalStorePath round-trip: got %q", loaded.LocalStorePath)
+	if len(loaded.Registries) != 2 {
+		t.Fatalf("round-trip registry count: got %d, want 2", len(loaded.Registries))
+	}
+	found, ok := loaded.FindRegistry("mycorp")
+	if !ok {
+		t.Fatal("mycorp registry not found after round-trip")
+	}
+	if found.CosignPolicy == nil || found.CosignPolicy.Issuer != "https://accounts.google.com" {
+		t.Errorf("cosign policy not preserved: %+v", found.CosignPolicy)
 	}
 }
 
-func TestLoadMalformed(t *testing.T) {
+func TestUpsertAndRemoveRegistry(t *testing.T) {
+	cfg, _ := DefaultConfig()
+
+	cfg.UpsertRegistry(RegistryConfig{Name: "a", URL: "a.example"})
+	cfg.UpsertRegistry(RegistryConfig{Name: "a", URL: "a.example/v2"})
+
+	if len(cfg.Registries) != 2 {
+		t.Fatalf("upsert should replace in place, got %d entries", len(cfg.Registries))
+	}
+	a, _ := cfg.FindRegistry("a")
+	if a.URL != "a.example/v2" {
+		t.Errorf("upsert did not replace: url=%q", a.URL)
+	}
+
+	if !cfg.RemoveRegistry("a") {
+		t.Error("RemoveRegistry returned false for existing registry")
+	}
+	if cfg.RemoveRegistry("a") {
+		t.Error("RemoveRegistry returned true for already-removed registry")
+	}
+}
+
+func TestLoadMalformedYAMLFails(t *testing.T) {
 	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "bad.yaml")
-	if err := os.WriteFile(configFile, []byte("invalid: yaml: content: :"), 0644); err != nil {
+	path := filepath.Join(tmpDir, "bad.yaml")
+	if err := os.WriteFile(path, []byte("invalid: yaml: content: :"), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := Load(configFile); err == nil {
-		t.Error("expected error on malformed YAML")
+	if _, err := Load(path); err == nil {
+		t.Error("expected parse error for malformed YAML")
+	}
+}
+
+func TestLoadFillsMissingDefaultRegistryFromFirstEntry(t *testing.T) {
+	// Simulates an older/hand-edited config without default_registry.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.yaml")
+	yaml := `local_store_path: /tmp/x
+registries:
+  - name: alpha
+    url: alpha.example
+  - name: beta
+    url: beta.example
+`
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultRegistry != "alpha" {
+		t.Errorf("expected default to backfill from first entry, got %q", cfg.DefaultRegistry)
 	}
 }
