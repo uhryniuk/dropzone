@@ -46,10 +46,6 @@ var (
 	// user to use `dz tags <image>` for a known image instead.
 	ErrCatalogUnavailable = errors.New("registry does not expose /v2/_catalog")
 
-	// ErrNotImplemented is returned by Pull in Phase 1. Phase 2 replaces
-	// it with the real implementation.
-	ErrNotImplemented = errors.New("not yet implemented")
-
 	// ErrRegistryNotFound means a reference named a registry that is not
 	// configured.
 	ErrRegistryNotFound = errors.New("registry not configured")

@@ -193,10 +193,3 @@ func TestClientDigestRead(t *testing.T) {
 	}
 }
 
-func TestClientPullIsStubbed(t *testing.T) {
-	client := NewClient()
-	_, err := client.Pull(context.Background(), nil, "")
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("Pull: want ErrNotImplemented, got %v", err)
-	}
-}
