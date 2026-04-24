@@ -10,31 +10,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AuthOptions holds authentication credentials.
-// In the future, sensitive fields should be encrypted before storage.
-type AuthOptions struct {
-	Username  string `yaml:"username,omitempty"`
-	Password  string `yaml:"password,omitempty"`
-	Token     string `yaml:"token,omitempty"`
-	AccessKey string `yaml:"access_key,omitempty"`
-	SecretKey string `yaml:"secret_key,omitempty"`
-}
-
-// ControlPlaneConfig defines the configuration for a remote package repository.
-type ControlPlaneConfig struct {
-	Name     string      `yaml:"name"`
-	Type     string      `yaml:"type"` // e.g., "oci", "github", "s3"
-	Endpoint string      `yaml:"endpoint"`
-	Auth     AuthOptions `yaml:"auth,omitempty"`
-}
-
 // Config represents the global configuration for dropzone.
+//
+// This is a deliberately thin placeholder; the Phase 1 rewrite replaces the
+// whole schema with {DefaultRegistry, Registries, CosignPolicy} per
+// docs/features/cli_foundations.md §3.4.
 type Config struct {
-	LocalStorePath         string               `yaml:"local_store_path"`
-	ActiveContainerRuntime string               `yaml:"active_container_runtime"` // "docker" or "podman"
-	ControlPlanes          []ControlPlaneConfig `yaml:"control_planes"`
+	LocalStorePath string `yaml:"local_store_path"`
 
-	// mu protects concurrent access to the config
 	mu sync.RWMutex
 }
 
@@ -44,16 +27,13 @@ func DefaultConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine home directory: %w", err)
 	}
-
 	return &Config{
-		LocalStorePath:         filepath.Join(home, ".dropzone"),
-		ActiveContainerRuntime: "docker", // Default to docker
-		ControlPlanes:          []ControlPlaneConfig{},
+		LocalStorePath: filepath.Join(home, ".dropzone"),
 	}, nil
 }
 
-// Load reads configuration from the specified path.
-// If the file does not exist, it returns a default configuration.
+// Load reads configuration from the specified path. Returns defaults when the
+// file does not exist.
 func Load(path string) (*Config, error) {
 	if !util.FileExists(path) {
 		return DefaultConfig()
@@ -69,15 +49,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Ensure defaults if fields are missing (e.g. empty file)
 	defaults, err := DefaultConfig()
-	if err == nil {
-		if cfg.LocalStorePath == "" {
-			cfg.LocalStorePath = defaults.LocalStorePath
-		}
-		if cfg.ActiveContainerRuntime == "" {
-			cfg.ActiveContainerRuntime = defaults.ActiveContainerRuntime
-		}
+	if err == nil && cfg.LocalStorePath == "" {
+		cfg.LocalStorePath = defaults.LocalStorePath
 	}
 
 	return cfg, nil
@@ -93,7 +67,6 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Ensure directory exists
 	if err := util.CreateDirIfNotExist(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
@@ -103,46 +76,4 @@ func (c *Config) Save(path string) error {
 	}
 
 	return nil
-}
-
-// AddControlPlane adds or updates a control plane configuration.
-func (c *Config) AddControlPlane(cp ControlPlaneConfig) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Check if exists and update
-	for i, existing := range c.ControlPlanes {
-		if existing.Name == cp.Name {
-			c.ControlPlanes[i] = cp
-			return
-		}
-	}
-	// Append new
-	c.ControlPlanes = append(c.ControlPlanes, cp)
-}
-
-// GetControlPlane retrieves a control plane by name.
-func (c *Config) GetControlPlane(name string) (ControlPlaneConfig, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	for _, cp := range c.ControlPlanes {
-		if cp.Name == name {
-			return cp, true
-		}
-	}
-	return ControlPlaneConfig{}, false
-}
-
-// RemoveControlPlane removes a control plane by name.
-func (c *Config) RemoveControlPlane(name string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for i, cp := range c.ControlPlanes {
-		if cp.Name == name {
-			c.ControlPlanes = append(c.ControlPlanes[:i], c.ControlPlanes[i+1:]...)
-			return
-		}
-	}
 }
