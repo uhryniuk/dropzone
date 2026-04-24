@@ -1,122 +1,120 @@
 # Dropzone
 
-**Dropzone** is a decentralized meta-package manager that leverages OCI (Open Container Initiative) containers for building, distributing, and installing software. It treats containers as "care packages," allowing for reproducible builds, isolation, and seamless integration into your host system.
+**Dropzone** is a consumer CLI that installs binaries from signed OCI container images directly onto your Linux or macOS host. It treats container registries as first-class package registries: add a registry, browse it, install the entrypoint binary, and keep it up-to-date with CVE-patched rebuilds — all with Sigstore-verified provenance.
 
-## 🚀 Concept
+No container runtime at use time. The extracted binary runs natively against its bundled libraries.
 
-The core idea is simple: **Distribute binaries and tools using containers.**
+## Concept
 
--   **Build**: Packages are defined using standard `Dockerfile`s.
--   **Distribute**: Packages are pushed to standard container registries (like Docker Hub, GHCR, etc.) or other storage backends.
--   **Install**: Dropzone downloads the artifact, verifies its integrity via signed checksums, and integrates the binaries into your host's `PATH` using symbolic links.
+The idea is simple: **hardened container images already exist — use them as your source of truth for binaries.**
 
-This approach ensures that dependencies used during the build process don't pollute your host system, while the final application feels like a native installation.
+- **Pull** a signed OCI image from any registry (default: `cgr.dev/chainguard`).
+- **Verify** the signature with cosign against a per-registry identity policy.
+- **Shim** the entrypoint binary plus its dynamic library closure onto your `PATH`.
+- **Update** directly against the registry to pick up CVE-patch rebuilds of the same tag.
 
-## ✨ Features (MVP)
+Default registry is Chainguard, so `dz install jq` gives you a hardened, continuously-rebuilt `jq` with a cryptographic receipt. Any OCI registry is supported; unsigned images require `--allow-unsigned`.
 
-*   **📦 Local Package Building**: Build care packages from Dockerfiles using Docker or Podman. Supports custom build arguments and environment variables.
-*   **🔐 Decentralized Control Planes**: Add any OCI-compatible registry as a package source. Supports authentication for private repositories.
-*   **🛡️ Security & Attestation**: Enforces cryptographic checksum verification. Packages must be signed to be installed, ensuring integrity and authenticity.
-*   **🤝 Host Integration**: Seamlessly links installed binaries to your user `PATH`.
-*   **⚡ Conflict Resolution**: Robustly detects binary name conflicts with system tools or other packages, preventing accidental overwrites.
-*   **📝 Version Management**: Install, list, and remove specific versions of packages.
+## Features
 
-## 🛠️ Installation
+*   **Registries as package registries** — `dz add registry`, `dz list registries`, `dz search`, `dz tags`. Walks the OCI distribution `/v2/` API directly.
+*   **Cosign verification by default** — per-registry policies pin the signer identity. Pre-seeded with the correct Chainguard policy.
+*   **Attestation surfacing** — install output shows signer identity, SBOM availability, SLSA provenance, and vulnerability-scan summary when present.
+*   **Digest-pinned updates** — `dz update` detects same-tag rebuilds (CVE patches) as well as new tags, not just version bumps.
+*   **Native execution** — the image's rootfs is unpacked and a wrapper script invokes the entrypoint with library paths pointing into the bundled rootfs. No container at runtime, no binary rewriting.
+*   **Conflict resolution** — overwrites other dropzone-managed binaries with a warning; skips system-installed binaries with a warning and explanation.
+
+## Installation
 
 ### Prerequisites
 
--   **Go** (1.23+)
--   **Docker** or **Podman** installed and running.
--   **GPG** (for signing and verifying packages).
+-   **Linux** (x86_64 or aarch64) or **macOS** (x86_64 or arm64)
+-   A **POSIX shell** at `/bin/sh` (used by per-package wrapper scripts)
+-   **Go** (1.23+) if building from source
+
+No runtime dependencies. Dropzone ships as a single Go binary — cosign and patchelf are **not** required on your host. Signature verification uses `sigstore-go` as an embedded library; the OCI registry client is `go-containerregistry`, also embedded. Install time is a tar-unpack plus a wrapper-script write; no binary rewriting.
+
+> **Platform note:** dropzone installs whatever platform entry the registry resolves for your host. If an image ships only `linux/*` platforms, it is not installable on macOS. Chainguard's current catalog is Linux-only; hardened macOS images are a separate and emerging space.
 
 ### Build from Source
 
 ```bash
 git clone https://github.com/uhryniuk/dropzone.git
 cd dropzone
-go build -o dropzone cmd/dropzone/main.go
-
-# Optional: Move to a directory in your PATH
-sudo mv dropzone /usr/local/bin/
+CGO_ENABLED=0 go build -o dz ./cmd/dropzone
+sudo mv dz /usr/local/bin/
 ```
 
-## 📖 Usage
+`CGO_ENABLED=0` produces a fully static binary on Linux. On macOS the result links against system-provided frameworks only (no cgo), which is the standard way to ship a dependency-free macOS tool.
 
-### 1. Initialize
+On first run, dropzone creates `~/.dropzone/` and prompts you to add `~/.dropzone/bin` to your `PATH`. The default `chainguard` registry is pre-configured.
 
-On the first run, Dropzone will create its configuration directory at `~/.dropzone` and advise you on how to add `~/.dropzone/bin` to your `PATH`.
+## Usage
+
+### Install a package
 
 ```bash
-dropzone version
+# Short name — expanded against the default registry
+dz install jq
+
+# Fully qualified registry + image + tag
+dz install chainguard/jq:latest
+
+# Install from a registry without a configured signing policy
+dz install mycorp/internal-tool --allow-unsigned
 ```
 
-### 2. Build a Package Locally
-
-Create a `Dockerfile` that defines your package. The final stage must use `LABEL dropzone.package="<name>"` and place files in `/dropzone/install`.
+### Manage registries
 
 ```bash
-# Build the package (prompts for GPG signing)
-dropzone build myapp ./Dockerfile --build-arg VERSION=1.0.0
+dz list registries
+
+# Add your company's hardened registry with a GitHub Actions signing policy
+dz add registry mycorp registry.mycorp.example/hardened \
+  --identity-issuer https://token.actions.githubusercontent.com \
+  --identity-regex 'https://github.com/mycorp/.*'
+
+dz remove registry mycorp
 ```
 
-### 3. Manage Repositories
-
-Add a remote repository (Control Plane) to discover packages.
+### Browse
 
 ```bash
-# Add a public OCI registry
-dropzone add repo my-registry oci://registry.example.com/packages
+# List images in a registry (when /v2/_catalog is available)
+dz search --registry chainguard
 
-# Add a private registry with authentication
-dropzone add repo private-repo oci://private.example.com/packages --username myuser --token mytoken
+# List available tags for a specific image
+dz tags jq
 ```
 
-Update the local package index:
+### List, update, remove
 
 ```bash
-dropzone update
+dz list                  # installed packages
+dz update                # check every installed package against its source registry
+dz update jq             # just one package
+dz remove jq
 ```
 
-### 4. Install a Package
+## How it works
 
-Download and install a package. Dropzone verifies the signature and links binaries.
+1. **Resolve** the reference to a registry + image + tag, then to a concrete digest, selecting the manifest entry for your host OS + arch.
+2. **Verify** the image signature via Sigstore against the registry's policy. Fail closed unless `--allow-unsigned`.
+3. **Unpack** the image's full rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/`. The container's libraries, loader, and bundled resources all come along.
+4. **Generate a wrapper script** at `~/.dropzone/bin/<name>` that invokes the entrypoint from the bundled rootfs with library-search env vars pointing at the rootfs's `lib` directories. No binary rewriting.
+5. **Record** the resolved digest in package metadata, so `dz update` can detect upstream rebuilds of the same tag.
 
-```bash
-# Install the latest version
-dropzone install myapp
+## Roadmap
 
-# Install a specific version
-dropzone install myapp:1.0.0
-```
+Deferred from MVP, in rough priority order:
 
-### 5. List and Remove
+-   `dz publish` — build + sign + push a hardened image for your own tools.
+-   **Rollback** — restore the previous version after an update.
+-   **Multiple binaries per image** — expose more than the entrypoint.
+-   **Attestation-based install policies** — refuse images with open critical CVEs.
+-   **Non-keyless signers** — support key-based cosign signatures.
+-   **Non-Linux hosts.**
 
-View installed and available packages:
-
-```bash
-dropzone list
-```
-
-Remove a package:
-
-```bash
-# Remove a specific version
-dropzone remove myapp:1.0.0
-
-# Remove all versions (interactive)
-dropzone remove myapp
-```
-
-## 🗺️ Roadmap
-
--   [ ] **Dependency Resolution**: Declare dependencies between care packages (`dropzone.yaml`).
--   [ ] **Advanced Version Management**: "Switch" active versions of a binary without uninstalling.
--   [ ] **Multi-Architecture Support**: Build and install packages for different architectures (ARM vs x86).
--   [ ] **Rollback**: Easily revert to a previous working version of a package.
--   [ ] **Advanced Host Integration**: Support for man pages, desktop entries, and FUSE-based mounting.
--   [ ] **Security Scanning**: Integrate container scanning during the build process.
--   [ ] **Web/GUI Interface**: A visual manager for your care packages.
-
-## 📄 License
+## License
 
 [MIT](LICENSE)

@@ -2,230 +2,269 @@
 
 ## 1. Introduction
 
-`dropzone` is a novel meta-package manager designed to leverage the power and isolation of OCI (Open Container Initiative) containers for building and delivering software packages. It introduces the concept of "care packages," which are essentially self-contained software distributions built within Docker or Podman containers. The primary goal is to provide a reproducible, isolated, and portable way to manage software dependencies and applications, making them easily consumable on a host system.
+`dropzone` is a consumer CLI for installing binaries out of signed OCI container images onto a Linux or macOS host. It treats OCI registries as first-class package registries: users can add registries, browse catalogs, list tags, install the entrypoint binary of an image, and check for updates — all against the live registry. The extracted binary runs natively on the host; no container runtime is involved at use time.
 
-A key aspect of `dropzone` is its decentralized nature, utilizing "control planes" which are essentially repositories for discovering and distributing care packages. These control planes can be any accessible location capable of hosting container images or package artifacts, such as container registries, GitHub Releases pages, or S3 buckets.
+For each install, dropzone selects the manifest-list entry matching the host OS and architecture (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`). Images that don't ship a matching platform entry are not installable — dropzone reports this clearly and does not attempt translation or VM-based execution. In practice this means Linux-only image catalogs (such as Chainguard's current offering) work on Linux hosts; macOS hosts need images that explicitly ship `darwin/*` platforms.
+
+Signed images are the default, and signature verification is gated by a per-registry policy. Unsigned images refuse to install unless the user explicitly opts in with `--allow-unsigned`. The default registry is `cgr.dev/chainguard`, pre-configured with the correct cosign keyless identity policy, so the out-of-the-box experience is "install hardened, continuously-rebuilt versions of common CLI tools with a cryptographic receipt."
 
 ## 2. Goals
 
-The `dropzone` project aims to achieve the following:
+*   **Use OCI registries as package registries.** Walk the `/v2/` distribution API directly for catalog, tags, and manifest operations. Behave like a registry client, not a `docker pull` wrapper.
+*   **Install binaries natively on the host.** Unpack the full image rootfs into a per-package directory, generate a wrapper script at `~/.dropzone/bin/<name>` that invokes the entrypoint from inside the bundled rootfs with library paths set appropriately. The user runs it like any other binary.
+*   **Verify provenance with cosign / Sigstore.** Every install performs keyless signature verification against a registry-specific policy. Fail closed unless the user opts in to an unsigned install.
+*   **Surface attestations on install.** Show signer identity, SBOM availability, SLSA provenance, and vulnerability-scan summary so users see *why* an install is trustworthy.
+*   **Update against the live registry.** `dz update` hits `/v2/<name>/tags/list` and digest endpoints for installed packages, detects rebuilds of the same tag (CVE-patch rolls) as well as newer tags, and re-shims.
+*   **Simplicity.** No Dockerfile authoring, no custom package format, no GPG, no credential store of our own. Consume OCI images that already exist on registries we can reach.
 
-*   **Reproducibility**: Ensure that package builds are consistent across different environments by encapsulating all build-time dependencies within an OCI container.
-*   **Isolation**: Prevent dependency conflicts on the host system by building and packaging applications in isolated container environments.
-*   **Portability**: Allow "care packages" to be easily shared and installed across various Linux distributions and environments that support Docker or Podman.
-*   **Simplicity**: Utilize familiar container technologies (Dockerfiles/Containerfiles) as the primary package definition format, reducing the learning curve for developers.
-*   **Version Control Integration**: Naturally integrate with existing version control systems by treating Dockerfiles as the source of truth for package definitions.
-*   **Host System Integration**: Seamlessly integrate container-built applications into the host's user environment, making them accessible via the PATH, with robust conflict resolution.
-*   **Decentralization**: Empower users to define and manage their own package sources (control planes) without reliance on a central authority, including support for private repositories.
-*   **Attestation**: Provide mechanisms for package integrity verification through signed checksums, ensuring both integrity and authenticity.
-*   **Developer Experience**: Enable package creators to easily define and build care packages, including passing custom build arguments.
+## 3. Non-goals (MVP)
 
-## 3. Minimum Viable Product (MVP) Design
+*   Local package building. `dz build` is gone. Users do not author packages through dropzone.
+*   Publishing artifacts. No `dz push`. A future `dz publish` is plausible but out of scope.
+*   GPG or any signing scheme other than Sigstore.
+*   Non-OCI control planes (GitHub Releases, S3). Gone from the design.
+*   Automatic platform translation. We install whatever the registry resolves for the host OS + arch. If the manifest list has no compatible entry, install fails with a clear error. No Linux-on-macOS VM, no Rosetta-style translation.
+*   Multiple-binary packages. MVP installs the image's entrypoint binary only.
+*   Shell-script entrypoints. If `ENTRYPOINT[0]` is not an ELF (Linux) or Mach-O (macOS) matching the host, install fails with a clear error. Chainguard's "Dev variant" images use script entrypoints; consume the non-Dev variant instead.
+*   Windows hosts.
+*   Dependency resolution between packages.
 
-The MVP focuses on the core functionality required to establish `dropzone` as a usable and valuable decentralized package manager.
+## 4. Architecture
 
-### 3.1. MVP Core Concepts
-
-*   **Care Packages**: Self-contained software distributions built in OCI containers, organized into a specific `/dropzone/install` directory structure. Identified by `LABEL dropzone.package="<package-name>"`.
-*   **OCI Container Builds**: All packages are built using Docker or Podman, leveraging multi-stage builds.
-*   **Dockerfile/Containerfile as Package Definition**: The primary format for defining care packages, specifying build steps and final artifact layout.
-*   **Host System Integration**: Care packages are integrated into the host's PATH via symbolic links from a `dropzone`-managed directory (`~/.dropzone/bin`).
-*   **Control Planes (Decentralized Repositories)**: User-defined remote sources for discovering and distributing care packages (OCI registries, GitHub Releases, S3 buckets). **MVP includes support for authentication for private OCI registries.**
-*   **GitHub User Discovery**: Users can simply provide a GitHub username (e.g., `dropzone add repo <username>`). Dropzone will automatically discover care packages in that user's `care-package` repository (via Releases or GHCR).
-*   **Attestation (Signed Checksums)**: Care packages downloaded from control planes *must* be accompanied by and verified against cryptographically signed checksums to ensure both integrity and authenticity.
-*   **Binary Conflict Resolution**: During installation, `dropzone` will detect and provide a clear, predictable mechanism for handling conflicts when multiple packages attempt to install binaries with the same name.
-*   **Custom Build Arguments**: Users creating care packages can pass custom arguments/environment variables to the underlying `docker build` or `podman build` command.
-
-### 3.2. MVP Architecture
-
-`dropzone` will consist of these key components for the MVP:
-
-*   **`dropzone` CLI**: The command-line interface for users to interact with `dropzone`, including commands for building, installing, listing, removing specific package versions, managing control planes, and authentication.
-*   **Control Plane Manager**: Responsible for adding, removing, updating, and authenticating with configured control planes. It will abstract interactions with different repository types.
-*   **Build Engine Abstraction**: Interfaces with Docker or Podman to execute container builds from Dockerfiles, *including passing custom build arguments*.
-*   **Local Cache/Storage**: A dedicated directory (`~/.dropzone`) on the host system to store `dropzone`'s configuration, downloaded care package artifacts, extracted package contents, metadata, and fetched control plane indices.
-*   **Runtime Linker/Mounter**: A component responsible for creating symbolic links to expose care package contents to the host's PATH, *implementing binary conflict detection and resolution*.
-*   **Attestation Verifier**: A component to verify *signed checksums* of care packages retrieved from control planes, ensuring authenticity.
-
-```/dev/null/dropzone_architecture.plantuml#L1-15
-+-------------------+      +-------------------+\
-|   dropzone CLI    |----->| Build Engine      |\
-|  (Auth Prompts)   |      | (Docker/Podman,   |\
-++-------------------+      | w/ Build Args)    |\
-+          |                         +--------+----------+\
-+          v                                   |\
-+-------------------+      +-------------------+\
-| Control Plane     |<-----| Package Building  |\
-| Manager           |      | (Dockerfile exec) |\
-|(w/ Authentication)|      +--------+----------+\
-++--------+----------+            | (built artifacts)\
-+          | (pull index)          v\
-+          v            +-------------------+\
-++-------------------+  | Attestation       |\
-+|  Local Storage    |<---| Verifier          |\
-+| (~/.dropzone)     |  | (Signed Checksums)|\
-++--------+----------+  +-------------------+\
-+          |                         ^\
-+          v                         |\
-++-------------------+      +-------------------+\
-+| Runtime Linker/   |----->| Host System PATH  |\
-+| Mounter           |      | (Symbolic Links/  |\
-+|(w/ Conflict Res.) |      | Mount Points)     |\
-++-------------------+      +-------------------+\
+```
+                     +------------------+
+                     |   dropzone CLI   |  add-registry / list-registries
+                     |                  |  search / tags
+                     |                  |  install / list / update / remove
+                     +--------+---------+
+                              |
+              +---------------+----------------+
+              |               |                |
+              v               v                v
+   +--------------------+ +---------------+ +--------------+
+   | Registry Manager   | | Cosign        | | Host         |
+   | - configured list  | | Verifier      | | Integrator   |
+   | - per-registry     | | - sig policy  | | - PATH setup |
+   |   cosign policy    | | - attestation | | - symlinks   |
+   | - catalog / tags   | |   fetch       | | - conflicts  |
+   | - pull             | +-------+-------+ +------+-------+
+   +---------+----------+         |                ^
+             |                    |                |
+             v                    v                |
+   +--------------------------------------+        |
+   | Shim Builder                         |--------+
+   |  - unpack full image rootfs          |
+   |  - validate entrypoint (ELF/Mach-O)  |
+   |  - write POSIX wrapper script        |
+   |  - no binary rewriting               |
+   +--------------------------------------+
+                              |
+                              v
+                     +------------------+
+                     | Local Store      |
+                     | ~/.dropzone/     |
+                     |  packages/<n>/   |
+                     |  bin/ (symlinks) |
+                     |  cache/          |
+                     |  config/         |
+                     +------------------+
 ```
 
-### 3.3. MVP Workflow
+### 4.1. Registry Manager (`internal/registry/`)
 
-#### 3.3.1. Defining a Care Package
+Owns the list of configured registries. Talks the OCI distribution `/v2/` API directly via `google/go-containerregistry` as a Go library (no subprocess shell-outs to `docker` or `crane`). Exposes:
 
-A user defines a care package by creating a `Dockerfile` (or `Containerfile`) in a dedicated directory. This `Dockerfile` must:
-1.  Define a multi-stage build, if necessary.
-2.  Have a final stage that copies the desired executables, libraries, and other assets into a specific output directory within the container, for example, `/dropzone/install`.
-3.  Include `LABEL dropzone.package="<package-name>"` in the final stage.
+*   `Catalog(registry)` — list repositories, via `/v2/_catalog`. Best-effort: registries that disable the endpoint return a typed "catalog unavailable" error that surfaces cleanly in the CLI.
+*   `Tags(registry, image)` — list tags via `/v2/<name>/tags/list`. Widely supported even when catalog is not.
+*   `Resolve(ref)` — resolve a reference (short name or fully qualified) to a registry + image + tag + digest.
+*   `Pull(ref, stagingDir)` — fetch the manifest, resolve the host-compatible entry from the manifest list, pull and flatten layers into a staging directory. Also returns the image config so the caller can read `Entrypoint`.
 
-Example `Dockerfile`:
+Authentication uses the user's existing `~/.docker/config.json` and Docker credential helpers — `go-containerregistry` handles this natively.
 
-```/dev/null/example.Dockerfile#L1-15
-# Stage 1: Build the application
-FROM golang:1.22-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go mod tidy && go build -o myapp ./cmd/myapp
+Catalog and tag responses cache under `~/.dropzone/cache/<registry-name>/` with a short TTL. `dz update` forces a refresh.
 
-# Stage 2: Create the care package
-FROM alpine:latest
-LABEL dropzone.package="myapp"
-WORKDIR /dropzone/install
+### 4.2. Cosign Verifier (`internal/cosign/`)
 
-# Create standard bin, lib, share directories within the package
-RUN mkdir -p /dropzone/install/bin \
-           /dropzone/install/lib \
-           /dropzone/install/share
+Runs Sigstore verification against the policy attached to the source registry. Pre-seeded Chainguard policy pins:
 
-# Copy the built application into the 'bin' directory
-COPY --from=builder /app/myapp /dropzone/install/bin/myapp
-```
+*   `certificate_oidc_issuer: https://token.actions.githubusercontent.com`
+*   `certificate_identity_regex: https://github.com/chainguard-images/images/.*`
 
-#### 3.3.2. Building a Care Package Locally
+User-added registries either declare a policy at `add` time (raw fields or a `--template`) or require `--allow-unsigned` per install.
 
-The user would invoke the `dropzone` CLI to build a care package from a `Dockerfile`, *optionally providing build arguments*:
+Uses `github.com/sigstore/sigstore-go` as a Go library. No external `cosign` binary, no subprocess calls. This keeps dropzone a single static Go binary with no runtime dependencies.
+
+Attestation surfacing: after signature verification, fetch SBOM + SLSA provenance + vulnerability-scan attestations via the same library path (the Sigstore bundle format carries attestations alongside signatures) and summarize them in the install output.
+
+### 4.3. Shim Builder (`internal/shim/`)
+
+Given the staging filesystem from the registry pull and the entrypoint path from the image config:
+
+1.  Confirm `ENTRYPOINT[0]` exists in the rootfs and is an ELF (Linux hosts) or Mach-O (macOS hosts) matching the host CPU arch. Reject shell-script entrypoints, empty entrypoints, and binaries for the wrong OS/arch with a clear error.
+2.  Move (or copy) the entire staged rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/`. No closure walk, no ELF/Mach-O rewriting, no selective copy. The whole image filesystem is preserved so any runtime dep the binary reaches for — plugins, locale data, CA bundles, NSS modules bundled in the image — is present.
+3.  Detect the dynamic loader inside the rootfs (best-effort, from a list of well-known paths: `/lib64/ld-linux-x86-64.so.2`, `/lib/ld-linux-aarch64.so.1`, `/lib/ld-musl-x86_64.so.1`, etc. on Linux; on macOS the loader is always the system's `dyld`, so there's nothing to bundle).
+4.  Generate a POSIX wrapper script at `~/.dropzone/bin/<name>` pointing at `~/.dropzone/packages/<name>/current/rootfs/<entrypoint>`. The wrapper sets library-search env vars to the bundled rootfs's `lib` directories and invokes the bundled loader directly (Linux) or relies on the system loader with a modified search path (macOS).
+
+Linux wrapper template (dynamically linked ELF):
 
 ```sh
-dropzone build myapp /path/to/myapp/Dockerfile [--build-arg KEY=VALUE] [--env KEY=VALUE]
+#!/bin/sh
+PKG="$HOME/.dropzone/packages/<name>/current"
+ROOT="$PKG/rootfs"
+exec "$ROOT/<loader>" --library-path "$ROOT/usr/lib:$ROOT/lib:$ROOT/usr/local/lib" "$ROOT/<entrypoint>" "$@"
 ```
 
-This command would:
-1.  Initiate a Docker/Podman build process for the specified `Dockerfile`, *passing any provided build arguments or environment variables*.
-2.  After a successful build, `dropzone` would extract the contents of the `/dropzone/install` directory from the final image stage into the `dropzone` local storage (e.g., `~/.dropzone/packages/myapp/v1.0.0`).
-3.  Generate a cryptographic checksum for the extracted package contents and *prompt the user to sign it (e.g., with GPG or a specified key) before storing, if enabled*.
-4.  Store metadata about the package, such as its version, the source Dockerfile hash, and the (signed) checksum.
-
-#### 3.3.3. Managing Control Planes (Including Authentication)
-
-Users can add new control planes to their `dropzone` client:
+Linux wrapper template (statically linked, no loader detected):
 
 ```sh
-dropzone add repo my-registry oci://myregistry.example.com/dropzone-packages [--username <user>] [--password <pass>|--token <token>]
-dropzone add repo my-gh-releases github://myorg/myrepo/releases [--token <token>]
-dropzone add repo my-s3 s3://my-dropzone-bucket/packages [--access-key <key>] [--secret-key <secret>]
-dropzone add repo <github-username> # Auto-discovers <github-username>/care-package
+#!/bin/sh
+exec "$HOME/.dropzone/packages/<name>/current/rootfs/<entrypoint>" "$@"
 ```
 
-The `dropzone update` command would then poll all configured repositories to check for updates:
+macOS wrapper template:
 
 ```sh
-dropzone update
+#!/bin/sh
+PKG="$HOME/.dropzone/packages/<name>/current"
+ROOT="$PKG/rootfs"
+DYLD_FALLBACK_LIBRARY_PATH="$ROOT/usr/lib:$ROOT/lib:$DYLD_FALLBACK_LIBRARY_PATH" \
+    exec "$ROOT/<entrypoint>" "$@"
 ```
 
-This command would:
-1.  Connect to each configured control plane, *using stored or provided authentication credentials if it's a private repository*.
-2.  Fetch metadata (e.g., package lists, versions, signed checksums) for available care packages.
-3.  Update the local cache of available packages.
+Pointing at `current` (a symlink to the active digest directory) means updates don't need to touch the wrapper — flipping `current` is enough.
 
-#### 3.3.4. Installing a Care Package
+If `ENTRYPOINT` has baked arguments (e.g., `["/usr/bin/tool", "--flag"]`), they're preserved verbatim before `"$@"`.
 
-To make a care package accessible on the host system, potentially from a remote control plane:
+Known limitations — documented, accepted, not worked around in MVP:
 
-```sh
-dropzone install myapp[:<tag>]
+*   The binary still runs against the *host's* `/etc` (resolv.conf, passwd, nsswitch), `/proc`, `/sys`, `/dev`, `/tmp`. No chroot, no namespaces — that would reintroduce a container runtime at use time.
+*   Paths hard-coded into the binary as absolute (e.g., `/etc/ssl/certs/ca-certificates.crt`) resolve against the host, not the rootfs. For TLS-sensitive tools, users can set `SSL_CERT_FILE` via shell wrapper or we add per-package env hints post-MVP.
+*   macOS System Integrity Protection strips `DYLD_*` env vars in some contexts (system binaries launching children). For our case — user-installed binaries in `$HOME` — SIP does not strip, so the wrapper works.
+
+### 4.4. Host Integrator (`internal/hostintegration/`)
+
+Unchanged in concept from the pre-pivot code, and mostly reusable:
+
+*   `SetupDropzoneBinPath` ensures `~/.dropzone/bin` is on the user's `PATH` (bash / zsh supported; others get a printed instruction).
+*   `LinkPackageBinaries` symlinks `~/.dropzone/packages/<name>/<version>/bin/<entrypoint>` into `~/.dropzone/bin/<entrypoint>`. Conflict policy: dropzone-vs-dropzone overwrites with a warning; dropzone-vs-system skips with a warning.
+*   `UnlinkPackageBinaries` inverts the above.
+
+### 4.5. Local Store (`internal/localstore/`)
+
+`~/.dropzone/` layout:
+
+```
+~/.dropzone/
+├── bin/                     # wrapper scripts (one per installed package)
+├── packages/
+│   └── <name>/
+│       ├── current          # symlink → active digest dir
+│       └── <digest>/
+│           ├── rootfs/      # full unpacked image filesystem
+│           └── metadata.json
+├── cache/
+│   └── <registry>/          # catalog + tags cache
+└── config/
+    └── config.yaml
 ```
 
-This command would:
-1.  If `myapp` is not locally available, `dropzone` would consult its configured control planes to find the latest or specified version of `myapp`.
-2.  Download the care package artifact (e.g., a container image, a tarball) from the relevant control plane, *authenticating if necessary*.
-3.  *Verify the integrity and authenticity of the downloaded package using its signed checksum.* If verification fails, the installation is aborted.
-4.  Extract the contents of the `/dropzone/install` directory from the artifact into the `dropzone` local storage (e.g., `~/.dropzone/packages/myapp/v1.0.0`).
-5.  *Before linking, `dropzone` will detect any binary name conflicts with already installed care packages or existing `PATH` binaries.* If conflicts are found, it will warn the user and apply a defined resolution strategy (e.g., allow explicit `--force` to overwrite, or suggest a `dropzone-` prefixed alternative).
-6.  Create symbolic links from `~/.dropzone/packages/myapp/v1.0.0/bin/*` to a `dropzone`-managed binary directory (e.g., `~/.dropzone/bin`).
-7.  Ensure that `~/.dropzone/bin` is added to the user's `PATH` environment variable (prompting the user for shell configuration updates if necessary).
+Package metadata records:
 
-#### 3.3.5. Listing Installed/Available Packages
+*   Source registry name.
+*   Image reference and tag the user asked for.
+*   Resolved digest at install time (required for `dz update` to detect rebuilds).
+*   Install timestamp.
+*   Signature verification status at install time.
 
-```sh
-dropzone list [--installed|--available|--repo <name>|--package <name>]
-dropzone tags <package-name> [--repo <name>]
+### 4.6. Configuration
+
+`~/.dropzone/config/config.yaml`:
+
+```yaml
+default_registry: chainguard
+registries:
+  - name: chainguard
+    url: cgr.dev/chainguard
+    cosign_policy:
+      issuer: https://token.actions.githubusercontent.com
+      identity_regex: https://github.com/chainguard-images/images/.*
+  - name: mycorp
+    url: registry.mycorp.example/hardened
+    cosign_policy:
+      issuer: https://accounts.google.com
+      identity_regex: .*@mycorp.example
 ```
 
-The `dropzone list` command would display a list of all locally available and/or installed care packages, along with their versions, indicating which control plane they originated from and their installation status.
-The `dropzone tags` command would display all available versions/tags for a specific package, potentially filtered by a control plane.
+No credential fields. Registry auth is delegated to Docker credential helpers.
 
-#### 3.3.6. Removing a Care Package (Version-Specific)
+## 5. Commands
 
-```sh
-dropzone remove myapp[:<tag>]
-```
+### 5.1. Registry management
 
-This command would:
-1.  Remove the symbolic links associated with the *specified version* of `myapp` from the `dropzone`-managed binary directory. If no tag is specified, it will interactively prompt the user to choose a version or confirm removal of all.
-2.  Remove the extracted package contents for the *specified version* from the local storage (`~/.dropzone/packages/`).
-3.  Remove the metadata for the *specified version* from local storage.
+*   `dz add registry <name> <url> [--template github|gitlab] [--identity-issuer <url>] [--identity-regex <regex>]` — register a new registry. Pre-seeded on first run with a `chainguard` entry.
+*   `dz list registries` — tabular output of configured registries and their policies.
+*   `dz remove registry <name>` — unregister.
 
-### 3.4. MVP Package Directory Format
+### 5.2. Discovery
 
-Within the final stage of the `Dockerfile`, the care package's contents should adhere to a conventional directory structure under `/dropzone/install`. This structure mirrors a typical Unix filesystem layout, making it easy for `dropzone` to integrate with the host's PATH.
+*   `dz search [<term>] [--registry <name>]` — list repositories in a registry via `/v2/_catalog`. Gracefully prints "catalog unavailable" when the registry disables the endpoint.
+*   `dz tags <image> [--registry <name>]` — list tags for a specific image.
 
-```/dev/null/package_format.txt#L1-7
-/dropzone/install/
-├── bin/          # Executables and scripts
-├── lib/          # Shared libraries
-├── share/        # Architecture-independent data (docs, man pages, etc.)
-├── etc/          # Configuration files (less common for care packages)
-└── var/          # Variable data (logs, temporary files - if applicable)
-```
+### 5.3. Lifecycle
 
-For example, if a `myapp` care package provides an executable, it would be copied to `/dropzone/install/bin/myapp` within the container.
+*   `dz install <ref> [--allow-unsigned]` — pull, verify, shim, link. `<ref>` may be a short name (expanded against `default_registry`) or fully qualified.
+*   `dz list` — installed packages with their source registry and current tag/digest.
+*   `dz update [<name>]` — for each installed package, query the source registry's tag list, compare installed digest to current digest for the installed tag, and prompt for re-install if the digest has moved (same-tag rebuilds) or offer upgrade to a newer tag.
+*   `dz remove <name>` — unshim and delete.
+*   `dz version` — print the dropzone binary version.
 
-### 3.5. MVP Generic Use Case: Distributing User Environments
+## 6. Install flow
 
-`dropzone` is ideal for distributing personal developer environments or specific toolchains. A single care package can encapsulate a collection of favorite binaries, configuration files, and even shell scripts, ensuring a consistent setup across different machines.
+1.  Parse `<ref>`; resolve against `default_registry` if short.
+2.  Registry Manager fetches the manifest list and selects the entry matching the host OS + arch (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`). No matching entry → abort with a clear error.
+3.  Fetch the image config; it must have a non-empty `Entrypoint`.
+4.  Sigstore Verifier runs against the registry's policy. If signature verification fails and `--allow-unsigned` was not passed, abort with a clear error.
+5.  Registry Manager flattens layers into a staging directory.
+6.  Shim Builder confirms `Entrypoint[0]` is an ELF or Mach-O for the host, moves the staged rootfs into the package directory, and writes the wrapper script at `~/.dropzone/bin/<name>`.
+7.  Local Store records metadata including the resolved digest.
+8.  Host Integrator flips `~/.dropzone/packages/<name>/current` to the new digest directory.
+9.  Install prints a summary: signer identity, attestations available, CVE-scan summary if present.
 
-For example, a "my-dev-env" care package could include:
-*   `neovim` (binary)
-*   `zed` (binary)
-*   `helix` (binary)
-*   `firefox` (binary, potentially requiring more complex integration)
-*   User configuration files (e.g., `.bashrc`, `.zshrc`, `.gitconfig` - symlinked or copied to appropriate user directories)
-*   Custom scripts
+## 7. Update flow
 
-This allows users to quickly provision a new machine with their preferred tools and configurations by simply installing their "my-dev-env" care package from a personal control plane.
+For each installed package (or the named one):
 
-### 3.6. MVP Installation and Setup of `dropzone`
+1.  Look up source registry + image + installed tag + installed digest from metadata.
+2.  Hit `/v2/<name>/tags/list` for the registry. If the installed tag is a floating tag (e.g., `latest`, `3.7`), also resolve that tag's current digest.
+3.  Report two kinds of update:
+    *   **Same tag, new digest** — a CVE-patch rebuild. Prompt to re-install to pick up the patch.
+    *   **New tag** — a newer version available. Prompt to move.
+4.  On confirmation, re-run the install flow, then clean up the old package directory.
 
-`dropzone` itself would be distributed as a single binary. Upon first run or installation:
-1.  It would create its home directory (e.g., `~/.dropzone`).
-2.  It would create `~/.dropzone/bin` and add it to the user's `PATH` by modifying their shell configuration file (e.g., `~/.bashrc`, `~/.zshrc`).
-3.  It would verify the presence of Docker or Podman on the system.
+This is the feature that makes the registry feel like a real registry — installed packages track upstream rebuilds, not just new version numbers.
 
-## 4. Future Enhancements and Roadmap
+## 8. Security model
 
-Features planned for beyond the initial MVP include:
+Trust flows from a registry's cosign policy. Verification is keyless / Sigstore-based. A verified signature says: "an identity matching the registry's configured policy signed this specific image digest." For the Chainguard default, that identity is the `chainguard-images/images` repository's GitHub Actions runner — so a verified signature is evidence the image came out of Chainguard's hardened build pipeline.
 
-*   **Advanced Version Management**: Explicitly support multiple versions of the same care package, allowing users to switch between them. (Basic version-specific removal is in MVP, but advanced switching/symlinking is future).
-*   **Dependency Resolution**: A mechanism to declare and resolve dependencies between care packages, potentially using a metadata file (e.g., `dropzone.yaml`) alongside the `Dockerfile`.
-*   **Security Scanning**: Integrate with container image security scanning tools during the build process.
-*   **Platform Specificity**: Handling packages that might require different builds for different host architectures (e.g., ARM vs. x86).
-*   **Rollback**: Ability to revert to a previous version of an installed care package.
-*   **GUI/Web Interface**: A graphical user interface for managing care packages.
-*   **Advanced Host Integration**: Explore more sophisticated methods for integrating diverse package types, such as FUSE for read-only filesystem layers for certain care packages, or managing desktop entries, systemd services, etc.
-*   **Garbage Collection**: Automatically detect and remove orphaned files or unlinked packages from `~/.dropzone`.
-*   **Query Language**: For complex `list` operations, a more powerful query language beyond simple flags could be considered (e.g., `dropzone find 'name=nginx AND status=installed'`).
+Attestations layered on top of signatures — SBOM, SLSA provenance, vulnerability scan — are surfaced to the user but not themselves gating. The gating decision is "is this signature valid under the registry's policy?"
+
+`--allow-unsigned` bypasses verification entirely and is logged in the package metadata as `signature_verified: false`. `dz list` surfaces unsigned installs distinctly.
+
+Known non-coverage, called out explicitly so we don't pretend otherwise:
+
+*   The binary runs against the host's `/etc/resolv.conf`, `/etc/ssl/certs`, `/etc/passwd`, `/proc`, `/sys`, `/dev`, `/tmp`. We unpack the container's rootfs and point library-search env vars at it, but we do not chroot or namespace-isolate. A container's binary running on the host's system configuration is the intended boundary.
+*   Absolute paths baked into binaries (CA bundles, timezone data, locale) resolve against the host, not the bundled rootfs. Tools that hard-code these may misbehave.
+*   A compromised cosign policy (wrong identity regex) defeats the trust story. Operators of user-added registries need to understand what they're pinning.
+
+## 9. Future work
+
+Called out so the design stays minimal now without losing track of obvious extensions:
+
+*   **`dz publish`** — a build + push + cosign-sign flow for users who want to ship their own hardened images through dropzone.
+*   **Multiple binaries per image** — honor `CMD` or additional image labels to expose more than one binary.
+*   **Rollback** — keep the previous package directory around after an update so `dz rollback <name>` can restore it.
+*   **Attestation-based install policies** — e.g., "refuse to install images with open critical CVEs per the attached vuln scan." Requires a policy language.
+*   **Non-keyless signers** — support signing keys in addition to identity-based verification.
+*   **Non-Linux hosts.**
+*   **Dependency resolution** — packages that declare they depend on other packages.

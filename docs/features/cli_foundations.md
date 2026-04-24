@@ -2,111 +2,114 @@
 
 ## 1. Overview
 
-This document outlines the design and implementation plan for the foundational elements of the `dropzone` Command Line Interface (CLI). This includes setting up the basic command structure, argument parsing, application context initialization, and core utility functions. This stage is crucial for establishing a stable and extensible base for all subsequent `dropzone` features.
+Foundational elements of the `dz` (dropzone) CLI: command tree, argument parsing, application context, and the config + local store it sits on top of. Everything here pre-dates the registry / cosign / shim work; it's what those features plug into.
 
 ## 2. Goals
 
-*   Provide a robust and user-friendly CLI experience.
-*   Establish a clear and consistent command structure.
-*   Ensure proper initialization and lifecycle management for the `dropzone` application.
-*   Provide common utility functions to reduce code duplication and improve maintainability.
-*   The CLI tool itself should be easily installable via `go install` or downloadable as a pre-built binary.
+*   Consistent, scannable command tree across registry management, discovery, and lifecycle operations.
+*   One `App` context that wires the Registry Manager, Sigstore Verifier, Shim Builder, Host Integrator, and Local Store together.
+*   Zero-config first run: create `~/.dropzone/` and pre-seed the default `chainguard` registry.
+*   Runs on Linux and macOS (both amd64 and arm64).
+*   Distributable as a single self-contained binary (`go install` or a release artifact). No runtime dependencies: Sigstore verification, OCI registry access, and rootfs unpack are all in-process via embedded libraries. Only a POSIX `/bin/sh` is needed to execute generated wrapper scripts, which both Linux and macOS provide by default.
 
 ## 3. Components
 
 ### 3.1. `cmd/dropzone/main.go`
 
-*   **Responsibility:** The entry point of the `dropzone` application.
-*   **Functionality:**
-    *   Initialize `cobra` (or similar CLI framework) root command.
-    *   Execute the CLI.
-    *   Handle top-level errors.
+Entry point. Constructs the `App`, calls `SetupCommands()`, runs `cobra.Execute()`, exits with a non-zero code on error.
 
-### 3.2. `internal/app/dropzone.go`
+### 3.2. `internal/app/`
 
-*   **Responsibility:** Manages the core application context and lifecycle.
-*   **Functionality:**
-    *   Define an `App` struct holding references to all core services (e.g., `ConfigManager`, `LocalStore`, `Logger`).
-    *   Provide an `Initialize` method to set up the `App` context, including loading configuration and ensuring local storage directories exist.
-    *   Provide a `Shutdown` method for graceful cleanup.
+*   `App` struct holds: `Config`, `LocalStore`, `RegistryManager`, `CosignVerifier`, `ShimBuilder`, `HostIntegrator`. Records detected host OS (`runtime.GOOS`) and arch (`runtime.GOARCH`) — used by the Registry Manager for manifest-list platform selection and by the Shim Builder for entrypoint format validation.
+*   `Initialize()` is idempotent: create `~/.dropzone/` subdirectories if missing, load config, seed the default `chainguard` registry entry if the config file doesn't exist yet, set up `~/.dropzone/bin` on `PATH` if needed (shell-aware, see host_integration.md). Refuses to run on any `runtime.GOOS` that isn't `linux` or `darwin`.
 
 ### 3.3. `internal/app/commands.go`
 
-*   **Responsibility:** Defines and registers all `dropzone` CLI commands and subcommands.
-*   **Functionality:**
-    *   Define the root command.
-    *   Define placeholder commands for `add`, `build`, `install`, `list`, `remove`, `update`, `version`.
-    *   Implement basic flag parsing and validation for each command.
-    *   Attach command handlers that leverage the `App` context.
+Command tree (Cobra):
+
+```
+dz
+├── add
+│   └── registry <name> <url> [--template github|gitlab] [--identity-issuer <url>] [--identity-regex <regex>]
+├── list
+│   ├── (no subcommand) → installed packages
+│   └── registries
+├── remove
+│   ├── <package>
+│   └── registry <name>
+├── search [<term>] [--registry <name>]
+├── tags <image> [--registry <name>]
+├── install <ref> [--allow-unsigned]
+├── update [<package>]
+└── version
+```
+
+Notes:
+
+*   `dz list` with no subcommand shows installed packages. `dz list registries` shows the registry config.
+*   `dz remove` routes on its first positional: `dz remove registry <name>` vs `dz remove <package>`.
+*   `--allow-unsigned` is the only install-time override of the signature policy. Name chosen over `--untrusted`/`--insecure` because it describes what's being permitted (an unsigned source), not a property of the user.
 
 ### 3.4. `internal/config/config.go`
 
-*   **Responsibility:** Manages `dropzone`'s persistent configuration.
-*   **Functionality:**
-    *   Define a `Config` struct (e.g., `LocalStorePath string`, `ControlPlanes []ControlPlaneConfig`, `ActiveContainerRuntime string`).
-    *   Load configuration from `~/.dropzone/config.yaml`.
-    *   Save configuration to `~/.dropzone/config.yaml`.
-    *   Provide default configuration values if no file exists.
-    *   Handle concurrent access to configuration data.
+Config schema (see DESIGN.md §4.6). No credential fields — auth is delegated to Docker credential helpers via `go-containerregistry`.
+
+```go
+type Config struct {
+    DefaultRegistry string           `yaml:"default_registry"`
+    Registries      []RegistryConfig `yaml:"registries"`
+}
+
+type RegistryConfig struct {
+    Name         string        `yaml:"name"`
+    URL          string        `yaml:"url"`
+    CosignPolicy *CosignPolicy `yaml:"cosign_policy,omitempty"`
+}
+
+type CosignPolicy struct {
+    Issuer        string `yaml:"issuer"`
+    IdentityRegex string `yaml:"identity_regex"`
+}
+```
+
+If `CosignPolicy` is nil, every install from that registry requires `--allow-unsigned`.
 
 ### 3.5. `internal/localstore/localstore.go`
 
-*   **Responsibility:** Manages the `~/.dropzone` directory structure and local data persistence.
-*   **Functionality:**
-    *   Define `LocalStore` struct with methods for interacting with the filesystem within `~/.dropzone`.
-    *   `Init()`: Create base directories (`~/.dropzone`, `~/.dropzone/bin`, `~/.dropzone/packages`, `~/.dropzone/config`).
-    *   `GetPackagePath(packageName, version string)`: Returns the path to an installed care package.
-    *   `GetConfigPath()`: Returns the path to the configuration file.
-    *   `StorePackageMetadata(metadata)`: Persists package metadata.
-    *   `GetPackageMetadata(packageName, version string)`: Retrieves package metadata.
+On-disk layout per DESIGN.md §4.5. Responsibilities:
+
+*   `Init()` — create subdirectories, seed config if missing.
+*   `GetPackagePath(name, version)` — path to an installed package directory.
+*   `StorePackageMetadata(metadata)` / `GetPackageMetadata(name, version)` — per-install metadata.
+*   `GetAllInstalled()` — for `dz list`.
+*   `CacheCatalog(registry, data)` / `GetCachedCatalog(registry)` — catalog + tags cache with TTL.
 
 ### 3.6. `internal/util/util.go`
 
-*   **Responsibility:** Provides common, reusable utility functions.
-*   **Functionality:**
-    *   `CreateDirIfNotExist(path string)`
-    *   `CopyFile(src, dest string)`
-    *   `RemovePath(path string)`
-    *   `FileExists(path string)`
-    *   `GetHomeDir()`: Returns the user's home directory.
-    *   Basic logging interface (`LogInfo`, `LogError`, `LogDebug`).
+Unchanged from the current code. Provides `GetHomeDir`, `FileExists`, `CreateDirIfNotExist`, `CopyFile`, `RemovePath`, and the logging helpers.
 
-## 4. Technical Details
+## 4. Technical details
 
-*   **Language:** Go (targeting 1.23+).
-*   **CLI Framework:** `cobra` or `urfave/cli` will be evaluated for command parsing and structure. `cobra` is preferred for its robust features and widespread use in the Go ecosystem.
-*   **Configuration Format:** YAML (`~/.dropzone/config.yaml`).
-*   **File System Interactions:** Standard Go library `os` and `io/fs` packages.
-*   **Error Handling:** Use Go's standard error wrapping.
+*   **Language:** Go 1.23+.
+*   **CLI framework:** `cobra` (already in use).
+*   **Config format:** YAML.
+*   **Logging:** `stderr` for human-readable output; no log file. Verbose mode via `-v` prints debug.
 
 ## 5. Testing
 
-### 5.1. Unit Tests
+### 5.1. Unit tests
 
-*   **`internal/app/commands.go`:**
-    *   Verify correct parsing of CLI flags and arguments for each command.
-    *   Test command validation logic (e.g., required arguments).
-*   **`internal/config/config.go`:**
-    *   Test `Load` and `Save` methods for correct serialization/deserialization.
-    *   Verify default configuration values are applied correctly.
-    *   Test error handling for malformed configuration files.
-*   **`internal/localstore/localstore.go`:**
-    *   Test `Init()` for correct directory creation.
-    *   Test `StorePackageMetadata` and `GetPackageMetadata` for data integrity.
-    *   Verify path generation methods.
-    *   Mock filesystem errors to test robust error handling.
-*   **`internal/util/util.go`:**
-    *   Test all utility functions (`CreateDirIfNotExist`, `CopyFile`, `RemovePath`, `FileExists`, `GetHomeDir`) against various scenarios (e.g., existing/non-existing paths, permissions issues).
+*   Config load/save round-trip, including the pre-seeded default registry on first run.
+*   Local store directory creation, metadata store/fetch, catalog cache TTL behavior.
+*   Command argument parsing for all subcommands, particularly the `remove` routing between `remove registry <name>` and `remove <package>`.
 
-### 5.2. Integration Tests
+### 5.2. Integration tests
 
-*   **CLI Command Execution:**
-    *   Run `dropzone` with various command combinations (e.g., `dropzone version`, `dropzone help`) and verify expected output and exit codes.
-    *   Test the overall initialization flow from `main.go` to `App.Initialize`.
-    *   Create a temporary `~/.dropzone` environment for testing that configuration and local storage are initialized correctly on first run.
+*   Fresh-install flow on Linux: run `dz version` in an empty `$HOME`, verify the `~/.dropzone/` tree exists and config has the default `chainguard` entry.
+*   Same on macOS (CI matrix covering `darwin/arm64` + `darwin/amd64`).
+*   `dz` on a non-Linux / non-macOS GOOS fails at startup with a clear message (`"dropzone supports Linux and macOS only"`).
 
-## 6. Open Questions / Future Considerations
+## 6. Open questions
 
-*   Should `dropzone` manage its own `log` file or rely solely on `stderr`/`stdout` for the MVP? For MVP, `stderr`/`stdout` is sufficient, with an option for verbose output.
-*   Detailed error reporting: how much context should be provided to the user for different types of failures? Start with concise messages and improve over time.
-*   Cross-platform compatibility: While Go handles this well, specific filesystem interactions (e.g., `PATH` manipulation) might need OS-specific adjustments (beyond MVP scope for now).
+*   Shell completion (bash / zsh / fish) — nice-to-have, not MVP.
+*   A `dz doctor` command that checks `~/.dropzone/bin` on `PATH`, package dir consistency (`current` symlink points at a real digest dir, wrappers exist for every installed package), and config health — plausibly MVP, small scope.
