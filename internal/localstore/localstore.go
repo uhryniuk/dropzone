@@ -1,7 +1,28 @@
+// Package localstore manages dropzone's on-disk state under ~/.dropzone/.
+//
+// Layout:
+//
+//	~/.dropzone/
+//	├── bin/                          # per-package wrapper scripts
+//	├── packages/
+//	│   └── <name>/
+//	│       ├── current               # symlink → active digest dir
+//	│       └── <digest-dir>/
+//	│           ├── rootfs/           # full unpacked image
+//	│           └── metadata.json
+//	├── cache/                        # registry catalog/tag cache (see internal/registry)
+//	└── config/
+//	    └── config.yaml
+//
+// The `current` symlink is the integration seam: the wrapper script at
+// ~/.dropzone/bin/<name> references `<name>/current/rootfs/<entrypoint>`,
+// so `dz update` atomically flips packages to a new digest by swapping the
+// symlink with no other state to change.
 package localstore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,335 +32,221 @@ import (
 	"github.com/uhryniuk/dropzone/internal/util"
 )
 
-// PackageMetadata represents metadata about an installed care package.
+// PackageMetadata is the per-installation record stored at
+// <digest-dir>/metadata.json. Each installed digest keeps its own file so
+// updates don't overwrite history and rollback can read a previous
+// digest's metadata if we ever retain multiple digest dirs per package.
 type PackageMetadata struct {
-	Name        string            `json:"name"`
-	Version     string            `json:"version"`
-	Checksum    string            `json:"checksum"`
-	Signature   []byte            `json:"signature,omitempty"`
-	PublicKey   string            `json:"public_key,omitempty"` // Reference to key used for verification
-	InstallDate time.Time         `json:"install_date"`
-	SourceRepo  string            `json:"source_repo,omitempty"` // Name of control plane
-	BuildInfo   map[string]string `json:"build_info,omitempty"`
+	Name              string    `json:"name"`
+	Tag               string    `json:"tag"`
+	Digest            string    `json:"digest"`
+	Registry          string    `json:"registry"`
+	Entrypoint        []string  `json:"entrypoint"`
+	Platform          string    `json:"platform"`
+	InstalledAt       time.Time `json:"installed_at"`
+	SignatureVerified bool      `json:"signature_verified"`
+	Signer            string    `json:"signer,omitempty"`
 }
 
-// LocalStore manages the local filesystem storage for dropzone.
+// ErrNotInstalled is returned by lookup methods for a package with no
+// `current` symlink.
+var ErrNotInstalled = errors.New("package not installed")
+
+// LocalStore manages the filesystem layout. Methods are safe for
+// concurrent use within a single process.
 type LocalStore struct {
 	basePath string
 	mu       sync.RWMutex
 }
 
-// New creates a new LocalStore instance rooted at basePath.
+// New constructs a LocalStore rooted at basePath (typically ~/.dropzone).
 func New(basePath string) *LocalStore {
-	return &LocalStore{
-		basePath: basePath,
-	}
+	return &LocalStore{basePath: basePath}
 }
 
-// Init ensures the necessary directory structure exists.
+// Init ensures the base directory structure exists. Idempotent.
 func (s *LocalStore) Init() error {
-	dirs := []string{
-		s.basePath,
-		s.BinPath(),
-		s.PackagesPath(),
-		s.ConfigPath(),
-		s.IndexPath(),
-	}
-
-	for _, dir := range dirs {
+	for _, dir := range []string{s.basePath, s.BinPath(), s.PackagesPath(), s.ConfigDir(), s.CacheDir()} {
 		if err := util.CreateDirIfNotExist(dir); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+			return fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
 	return nil
 }
 
-// BinPath returns the path to the bin directory (for symlinks).
-func (s *LocalStore) BinPath() string {
-	return filepath.Join(s.basePath, "bin")
+// Path helpers.
+
+func (s *LocalStore) BasePath() string     { return s.basePath }
+func (s *LocalStore) BinPath() string      { return filepath.Join(s.basePath, "bin") }
+func (s *LocalStore) PackagesPath() string { return filepath.Join(s.basePath, "packages") }
+func (s *LocalStore) ConfigDir() string    { return filepath.Join(s.basePath, "config") }
+func (s *LocalStore) CacheDir() string     { return filepath.Join(s.basePath, "cache") }
+
+// PackageDir returns the directory for a package by name (parent of digest
+// subdirectories). This is the unit of removal on `dz remove`.
+func (s *LocalStore) PackageDir(name string) string {
+	return filepath.Join(s.PackagesPath(), name)
 }
 
-// PackagesPath returns the path to the packages directory.
-func (s *LocalStore) PackagesPath() string {
-	return filepath.Join(s.basePath, "packages")
+// CurrentSymlinkPath returns the path of the `current` symlink for a
+// package. The symlink's target is a digest-directory name relative to
+// the package dir (so the link stays valid regardless of where the local
+// store is mounted).
+func (s *LocalStore) CurrentSymlinkPath(name string) string {
+	return filepath.Join(s.PackageDir(name), "current")
 }
 
-// ConfigPath returns the path to the config directory.
-func (s *LocalStore) ConfigPath() string {
-	return filepath.Join(s.basePath, "config")
+// DigestDirPath returns the directory for a specific digest-dir name.
+// Callers compute the digest-dir name via the shim package's
+// digestToDirName helper (colons replaced with dashes) so paths are
+// filesystem-safe.
+func (s *LocalStore) DigestDirPath(name, digestDirName string) string {
+	return filepath.Join(s.PackageDir(name), digestDirName)
 }
 
-// IndexPath returns the path to the control plane index directory.
-func (s *LocalStore) IndexPath() string {
-	return filepath.Join(s.basePath, "index")
-}
-
-// GetPackagePath returns the installation path for a specific package version.
-func (s *LocalStore) GetPackagePath(packageName, version string) string {
-	return filepath.Join(s.PackagesPath(), packageName, version)
-}
-
-// GetPackageMetadataPath returns the path to the metadata file for a specific package version.
-func (s *LocalStore) GetPackageMetadataPath(packageName, version string) string {
-	return filepath.Join(s.GetPackagePath(packageName, version), "metadata.json")
-}
-
-// StorePackage moves the extracted package contents from sourcePath to the permanent location.
-func (s *LocalStore) StorePackage(packageName, version, sourcePath string) (string, error) {
+// SetCurrent atomically points <name>/current at the given digest-dir
+// name. The digest directory must already exist. Uses symlink-then-rename
+// so the flip appears atomic to any concurrent reader.
+func (s *LocalStore) SetCurrent(name, digestDirName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	destPath := s.GetPackagePath(packageName, version)
-
-	// If destination exists, remove it first (reinstall)
-	if util.FileExists(destPath) {
-		if err := os.RemoveAll(destPath); err != nil {
-			return "", fmt.Errorf("failed to remove existing package version: %w", err)
-		}
+	pkgDir := s.PackageDir(name)
+	targetDir := filepath.Join(pkgDir, digestDirName)
+	if _, err := os.Stat(targetDir); err != nil {
+		return fmt.Errorf("digest dir does not exist: %w", err)
 	}
 
-	// Ensure parent directory (package name) exists
-	if err := util.CreateDirIfNotExist(filepath.Dir(destPath)); err != nil {
-		return "", fmt.Errorf("failed to create package parent directory: %w", err)
+	linkPath := s.CurrentSymlinkPath(name)
+	tmpLink := linkPath + ".new"
+
+	// os.Remove is a no-op if the .new side doesn't exist yet; we tolerate
+	// stale tmp links from a crashed prior attempt.
+	_ = os.Remove(tmpLink)
+	if err := os.Symlink(digestDirName, tmpLink); err != nil {
+		return fmt.Errorf("create tmp symlink: %w", err)
 	}
-
-	// Move the directory
-	if err := os.Rename(sourcePath, destPath); err != nil {
-		// Fallback to copy if rename fails (e.g., cross-device link)
-		if err := util.CopyFile(sourcePath, destPath); err != nil { // Note: util.CopyFile is for files, need recursive dir copy if implementing robustly, but for MVP/tests rename usually works if on same FS.
-			// Since util.CopyFile currently only supports single files, and implementing a full recursive copy
-			// is out of scope for this specific function block without expanding util, let's assume os.Rename works
-			// or fail. In a real scenario, we'd need a recursive copy fallback.
-			// For now, let's assume standard behavior on user home dir.
-			return "", fmt.Errorf("failed to move package to destination: %w", err)
-		}
+	if err := os.Rename(tmpLink, linkPath); err != nil {
+		_ = os.Remove(tmpLink)
+		return fmt.Errorf("swap symlink: %w", err)
 	}
-
-	return destPath, nil
-}
-
-// StorePackageMetadata persists the package metadata to a JSON file within the package directory.
-func (s *LocalStore) StorePackageMetadata(meta PackageMetadata) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	pkgPath := s.GetPackagePath(meta.Name, meta.Version)
-	if !util.FileExists(pkgPath) {
-		return fmt.Errorf("package directory does not exist: %s", pkgPath)
-	}
-
-	metaPath := s.GetPackageMetadataPath(meta.Name, meta.Version)
-
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write metadata file: %w", err)
-	}
-
 	return nil
 }
 
-// GetPackageMetadata retrieves the metadata for a specific package version.
-func (s *LocalStore) GetPackageMetadata(packageName, version string) (*PackageMetadata, error) {
+// CurrentDigestDir returns the digest-dir name that <name>/current points
+// at, or ErrNotInstalled if the symlink does not exist.
+func (s *LocalStore) CurrentDigestDir(name string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	metaPath := s.GetPackageMetadataPath(packageName, version)
-	if !util.FileExists(metaPath) {
-		return nil, fmt.Errorf("metadata not found for %s:%s", packageName, version)
-	}
-
-	data, err := os.ReadFile(metaPath)
+	target, err := os.Readlink(s.CurrentSymlinkPath(name))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read metadata file: %w", err)
+		if os.IsNotExist(err) {
+			return "", ErrNotInstalled
+		}
+		return "", err
 	}
+	return target, nil
+}
 
+// StoreMetadata writes metadata.json inside the digest directory for this
+// installation. The digest directory must already exist (shim.Build
+// creates it). Overwrites any existing file.
+func (s *LocalStore) StoreMetadata(meta PackageMetadata, digestDirName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dir := s.DigestDirPath(meta.Name, digestDirName)
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("digest dir does not exist: %w", err)
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal metadata: %w", err)
+	}
+	path := filepath.Join(dir, "metadata.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write metadata: %w", err)
+	}
+	return nil
+}
+
+// GetMetadata reads metadata.json for the currently-active installation
+// of a package. Returns ErrNotInstalled if no `current` symlink exists.
+func (s *LocalStore) GetMetadata(name string) (*PackageMetadata, error) {
+	digestDir, err := s.CurrentDigestDir(name)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetMetadataForDigestDir(name, digestDir)
+}
+
+// GetMetadataForDigestDir reads metadata.json from a specific digest
+// directory of a package, regardless of which digest is currently active.
+// Used by update flows to compare old and new digests.
+func (s *LocalStore) GetMetadataForDigestDir(name, digestDirName string) (*PackageMetadata, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	path := filepath.Join(s.DigestDirPath(name, digestDirName), "metadata.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotInstalled
+		}
+		return nil, fmt.Errorf("read metadata: %w", err)
+	}
 	var meta PackageMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		return nil, fmt.Errorf("parse metadata: %w", err)
 	}
-
 	return &meta, nil
 }
 
-// GetAllInstalledPackages returns metadata for all installed packages.
-func (s *LocalStore) GetAllInstalledPackages() ([]PackageMetadata, error) {
+// ListInstalled returns metadata for every package with an active
+// `current` symlink. Packages whose current symlink points at a missing
+// or corrupt digest dir are skipped (not a hard error; `dz doctor` will
+// reconcile them later).
+func (s *LocalStore) ListInstalled() ([]PackageMetadata, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var packages []PackageMetadata
-
-	pkgRootDir := s.PackagesPath()
-	if !util.FileExists(pkgRootDir) {
-		return packages, nil
-	}
-
-	entries, err := os.ReadDir(pkgRootDir)
+	root := s.PackagesPath()
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read packages directory: %w", err)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read packages dir: %w", err)
 	}
 
+	var out []PackageMetadata
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		packageName := entry.Name()
-
-		// Each package directory contains version directories
-		versionEntries, err := os.ReadDir(filepath.Join(pkgRootDir, packageName))
+		name := entry.Name()
+		linkTarget, err := os.Readlink(filepath.Join(root, name, "current"))
 		if err != nil {
-			continue // Skip problematic package dirs
+			continue // no current symlink → not a completed install
 		}
-
-		for _, verEntry := range versionEntries {
-			if !verEntry.IsDir() {
-				continue
-			}
-			version := verEntry.Name()
-
-			meta, err := s.GetPackageMetadata(packageName, version)
-			if err != nil {
-				// Log warning or skip? For now skip
-				continue
-			}
-			packages = append(packages, *meta)
-		}
-	}
-
-	return packages, nil
-}
-
-// GetInstalledPackageVersions returns metadata for all installed versions of a specific package.
-func (s *LocalStore) GetInstalledPackageVersions(packageName string) ([]PackageMetadata, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var versions []PackageMetadata
-	packageDir := filepath.Join(s.PackagesPath(), packageName)
-
-	if !util.FileExists(packageDir) {
-		return versions, nil
-	}
-
-	entries, err := os.ReadDir(packageDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read package directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		version := entry.Name()
-		meta, err := s.GetPackageMetadata(packageName, version)
-		if err == nil {
-			versions = append(versions, *meta)
-		}
-	}
-	return versions, nil
-}
-
-// RemovePackageFiles deletes the directory for a specific package version.
-func (s *LocalStore) RemovePackageFiles(packageName, version string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	path := s.GetPackagePath(packageName, version)
-	if !util.FileExists(path) {
-		return nil // Already gone
-	}
-
-	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("failed to remove package files: %w", err)
-	}
-
-	// Check if parent directory (package name) is empty, if so remove it
-	parent := filepath.Dir(path)
-	entries, err := os.ReadDir(parent)
-	if err == nil && len(entries) == 0 {
-		os.Remove(parent) // Ignore error if not empty or other issue
-	}
-
-	return nil
-}
-
-// Control Plane Index Management
-
-// StoreControlPlaneIndex saves the list of available packages from a control plane.
-func (s *LocalStore) StoreControlPlaneIndex(controlPlaneName string, index map[string][]PackageMetadata) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	indexPath := filepath.Join(s.IndexPath(), controlPlaneName+".json")
-
-	data, err := json.MarshalIndent(index, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal index: %w", err)
-	}
-
-	if err := os.WriteFile(indexPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write index file: %w", err)
-	}
-	return nil
-}
-
-// GetControlPlaneIndex retrieves the cached index for a control plane.
-func (s *LocalStore) GetControlPlaneIndex(controlPlaneName string) (map[string][]PackageMetadata, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	indexPath := filepath.Join(s.IndexPath(), controlPlaneName+".json")
-	if !util.FileExists(indexPath) {
-		return nil, os.ErrNotExist
-	}
-
-	data, err := os.ReadFile(indexPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read index file: %w", err)
-	}
-
-	var index map[string][]PackageMetadata
-	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal index: %w", err)
-	}
-	return index, nil
-}
-
-// GetAllAvailablePackagesFromIndexes aggregates all available packages from cached indexes.
-func (s *LocalStore) GetAllAvailablePackagesFromIndexes() ([]PackageMetadata, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var allPackages []PackageMetadata
-	indexDir := s.IndexPath()
-
-	if !util.FileExists(indexDir) {
-		return allPackages, nil
-	}
-
-	entries, err := os.ReadDir(indexDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read index directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-
-		controlPlaneName := entry.Name()[0 : len(entry.Name())-5]
-		index, err := s.GetControlPlaneIndex(controlPlaneName)
+		metaPath := filepath.Join(root, name, linkTarget, "metadata.json")
+		data, err := os.ReadFile(metaPath)
 		if err != nil {
 			continue
 		}
-
-		for _, pkgs := range index {
-			allPackages = append(allPackages, pkgs...)
+		var meta PackageMetadata
+		if err := json.Unmarshal(data, &meta); err != nil {
+			continue
 		}
+		out = append(out, meta)
 	}
+	return out, nil
+}
 
-	return allPackages, nil
+// RemovePackage deletes the entire packages/<name>/ tree. Callers should
+// unshim (remove the wrapper at bin/<name>) before calling this so a
+// broken remove doesn't leave a wrapper pointing at an absent directory.
+func (s *LocalStore) RemovePackage(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return os.RemoveAll(s.PackageDir(name))
 }

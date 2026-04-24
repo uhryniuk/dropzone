@@ -81,7 +81,7 @@ func (a *App) Initialize() error {
 	)
 	a.AuthStore = registry.NewAuthStore(authPath)
 
-	a.PackageHandler = packagehandler.New(a.LocalStore, a.HostIntegrator)
+	a.PackageHandler = packagehandler.New(a.LocalStore, a.HostIntegrator, a.RegistryManager)
 
 	return nil
 }

@@ -30,13 +30,11 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-// Every non-version command should return the not-reimplemented sentinel
-// so users get a clear message instead of a crash during the transition.
+// Commands still awaiting real implementations should return the
+// not-reimplemented sentinel. Install/list/remove have real behavior now
+// (phase 3) so they're intentionally excluded here.
 func TestStubCommandsReturnNotReimplemented(t *testing.T) {
 	cases := [][]string{
-		{"install", "foo"},
-		{"list"},
-		{"remove", "foo"},
 		{"update"},
 		{"search"},
 		{"tags", "foo"},

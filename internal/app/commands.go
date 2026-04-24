@@ -7,25 +7,28 @@ import (
 	"io"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/uhryniuk/dropzone/internal/hostintegration"
 	"golang.org/x/term"
 )
 
 const version = "v0.0.1-dev"
 
-// errNotReimplemented is returned by every command whose new implementation
-// has not landed yet. See docs/roadmap.md for the phase schedule.
+// errNotReimplemented is kept for commands that haven't been wired to
+// real implementations yet. See docs/roadmap.md for the phase schedule.
 var errNotReimplemented = errors.New("not yet reimplemented after design pivot; see docs/roadmap.md")
 
 // SetupCommands configures the CLI commands.
 func (a *App) SetupCommands() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "dropzone",
-		Short: "Install binaries from signed OCI images",
+		Use:           "dropzone",
+		Short:         "Install binaries from signed OCI images",
+		SilenceUsage:  true,
+		SilenceErrors: false,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// version is the only command that must work right after Phase 0.
-			// Everything else is stubbed and doesn't need App.Initialize() yet.
+			// `version` stays lightweight — no init, no disk touch.
 			if cmd.Name() == "version" {
 				return nil
 			}
@@ -43,6 +46,7 @@ func (a *App) SetupCommands() *cobra.Command {
 	rootCmd.AddCommand(a.newAddCommand())
 	rootCmd.AddCommand(a.newLoginCommand())
 	rootCmd.AddCommand(a.newLogoutCommand())
+	rootCmd.AddCommand(a.newPathCommand())
 
 	return rootCmd
 }
@@ -63,7 +67,19 @@ func (a *App) newInstallCommand() *cobra.Command {
 		Short: "Install a package from an OCI registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotReimplemented
+			result, err := a.PackageHandler.InstallPackage(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "\nInstalled %s %s (%s)\n", result.Name, result.Tag, shortDigest(result.Digest))
+			fmt.Fprintf(out, "  Registry: %s\n", result.Registry)
+			fmt.Fprintf(out, "  Platform: %s\n", result.Platform)
+			fmt.Fprintf(out, "  Binary:   %s\n", result.BinaryPath)
+			if !onPath(a.HostIntegrator.BinPath()) {
+				fmt.Fprintf(out, "\nNote: %s is not on your PATH. Run `dz path setup` to configure your shell.\n", a.HostIntegrator.BinPath())
+			}
+			return nil
 		},
 	}
 }
@@ -73,7 +89,21 @@ func (a *App) newListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List installed packages",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotReimplemented
+			pkgs, err := a.PackageHandler.ListInstalled()
+			if err != nil {
+				return err
+			}
+			if len(pkgs) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "No packages installed.")
+				return nil
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tTAG\tDIGEST\tREGISTRY\tINSTALLED")
+			for _, p := range pkgs {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					p.Name, p.Tag, shortDigest(p.Digest), p.Registry, p.InstalledAt.Format("2006-01-02 15:04"))
+			}
+			return w.Flush()
 		},
 	}
 }
@@ -84,7 +114,11 @@ func (a *App) newRemoveCommand() *cobra.Command {
 		Short: "Remove an installed package",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotReimplemented
+			if err := a.PackageHandler.RemovePackage(args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", args[0])
+			return nil
 		},
 	}
 }
@@ -160,8 +194,7 @@ Examples:
   echo $TOKEN | dz login ghcr.io -u alice --password-stdin`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			registryURL := args[0]
-			return runLogin(a, cmd, registryURL, username, password, passwordStdin)
+			return runLogin(a, cmd, args[0], username, password, passwordStdin)
 		},
 	}
 	cmd.Flags().StringVarP(&username, "username", "u", "", "Username")
@@ -192,6 +225,82 @@ func (a *App) newLogoutCommand() *cobra.Command {
 	}
 }
 
+func (a *App) newPathCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "path",
+		Short: "Manage shell PATH integration for ~/.dropzone/bin",
+		Long: `Report or configure whether ~/.dropzone/bin is on your shell PATH.
+
+With no subcommand, prints the current status. Use 'dz path setup' to
+append a PATH export to your shell's rc file, and 'dz path unset' to
+remove it. Both subcommands are idempotent.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPathStatus(a, cmd)
+		},
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "setup",
+		Short: "Append dropzone PATH export to your shell rc file",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wrote, rc, err := a.HostIntegrator.SetupShellRC()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if wrote {
+				fmt.Fprintf(out, "Added dropzone PATH block to %s.\n", rc)
+				fmt.Fprintf(out, "Run `source %s` or open a new shell to pick it up.\n", rc)
+			} else {
+				fmt.Fprintf(out, "Already configured in %s (no changes).\n", rc)
+			}
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "unset",
+		Short: "Remove dropzone's PATH block from your shell rc file",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			removed, rc, err := a.HostIntegrator.UnsetShellRC()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if removed {
+				fmt.Fprintf(out, "Removed dropzone PATH block from %s.\n", rc)
+				fmt.Fprintf(out, "Run `source %s` or open a new shell for the change to take effect.\n", rc)
+			} else {
+				fmt.Fprintf(out, "No dropzone PATH block found in %s (nothing to remove).\n", rc)
+			}
+			return nil
+		},
+	})
+	return cmd
+}
+
+func runPathStatus(a *App, cmd *cobra.Command) error {
+	status := a.HostIntegrator.PathStatus()
+	out := cmd.OutOrStdout()
+
+	fmt.Fprintf(out, "bin dir:       %s\n", status.BinDir)
+	if status.OnPath {
+		fmt.Fprintln(out, "on PATH:       yes")
+	} else {
+		fmt.Fprintln(out, "on PATH:       no")
+	}
+	if status.DetectedShell == "" {
+		fmt.Fprintln(out, "shell:         unknown ($SHELL not bash or zsh)")
+	} else {
+		fmt.Fprintf(out, "shell:         %s\n", status.DetectedShell)
+		fmt.Fprintf(out, "rc file:       %s\n", status.RCFile)
+		if status.RCBlockInstalled {
+			fmt.Fprintln(out, "rc block:      present")
+		} else {
+			fmt.Fprintln(out, "rc block:      absent (run `dz path setup` to add)")
+		}
+	}
+	return nil
+}
+
 // runLogin is split out so tests can exercise the flow without constructing
 // a full cobra Command tree.
 func runLogin(a *App, cmd *cobra.Command, registryURL, username, password string, passwordStdin bool) error {
@@ -220,8 +329,6 @@ func runLogin(a *App, cmd *cobra.Command, registryURL, username, password string
 		}
 		password = strings.TrimRight(string(data), "\r\n")
 	} else if password == "" {
-		// Read from the controlling terminal without echoing. Falls back
-		// to a plain ReadString when stdin isn't a tty (e.g., in tests).
 		if fd := int(syscall.Stdin); term.IsTerminal(fd) {
 			fmt.Fprintf(out, "Password: ")
 			b, err := term.ReadPassword(fd)
@@ -246,8 +353,22 @@ func runLogin(a *App, cmd *cobra.Command, registryURL, username, password string
 		return err
 	}
 	fmt.Fprintf(out, "Saved credentials for %s (user %s)\n", registryURL, username)
-	// Heads-up, not validation. A wrong password surfaces on the first
-	// install; skipping the ping keeps login simple and offline-friendly.
 	fmt.Fprintln(out, "Note: credentials are saved but not verified. They will be used on the next install or pull from this registry.")
 	return nil
+}
+
+// shortDigest truncates an OCI digest to "sha256:12chars" for display.
+// Anywhere we need the full digest (metadata, comparison) uses the full
+// form; this helper is strictly for human-readable output.
+func shortDigest(d string) string {
+	if i := strings.Index(d, ":"); i >= 0 && len(d) > i+13 {
+		return d[:i+13]
+	}
+	return d
+}
+
+// onPath delegates to hostintegration.OnPath. Tiny helper kept inside
+// this package so most of commands.go doesn't care about the import path.
+func onPath(dir string) bool {
+	return hostintegration.OnPath(dir)
 }
