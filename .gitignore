@@ -31,3 +31,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local development checkpoints / scratch notes (not committed)
+CHECKPOINT.md
+SCRATCH.md
