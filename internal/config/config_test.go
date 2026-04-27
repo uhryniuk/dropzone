@@ -125,3 +125,29 @@ registries:
 		t.Errorf("expected default to backfill from first entry, got %q", cfg.DefaultRegistry)
 	}
 }
+
+func TestLoadBackfillsSeededRegistryWhenFileHasNone(t *testing.T) {
+	// A config from before the registry schema landed (only
+	// local_store_path) — or a hand-emptied config — must still produce
+	// a usable Config with the chainguard entry seeded. Without this,
+	// `dz install jq` fails with "no default registry configured" and
+	// the user has to delete the file or hand-edit it.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(path, []byte("local_store_path: /tmp/x\n"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultRegistry != "chainguard" {
+		t.Errorf("default registry: got %q, want chainguard (backfilled)", cfg.DefaultRegistry)
+	}
+	if len(cfg.Registries) != 1 || cfg.Registries[0].Name != "chainguard" {
+		t.Errorf("registries: got %+v, want chainguard seed", cfg.Registries)
+	}
+	if cfg.Registries[0].CosignPolicy == nil {
+		t.Error("backfilled chainguard entry should carry its cosign policy")
+	}
+}

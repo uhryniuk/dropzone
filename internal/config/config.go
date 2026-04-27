@@ -89,7 +89,17 @@ func Load(path string) (*Config, error) {
 		if cfg.LocalStorePath == "" {
 			cfg.LocalStorePath = defaults.LocalStorePath
 		}
-		if cfg.DefaultRegistry == "" && len(cfg.Registries) > 0 {
+		// Pre-pivot configs (and hand-emptied configs) carry no
+		// registries. Backfill the seeded chainguard entry so dz install
+		// works without a manual edit. A user who explicitly wants a
+		// no-chainguard setup can put any other registry in place; once
+		// the list is non-empty we leave it alone.
+		if len(cfg.Registries) == 0 {
+			cfg.Registries = defaults.Registries
+			if cfg.DefaultRegistry == "" {
+				cfg.DefaultRegistry = defaults.DefaultRegistry
+			}
+		} else if cfg.DefaultRegistry == "" {
 			cfg.DefaultRegistry = cfg.Registries[0].Name
 		}
 	}
