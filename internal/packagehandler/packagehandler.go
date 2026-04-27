@@ -305,10 +305,12 @@ func digestDirFromResult(digest string) string {
 }
 
 // annotatePullError adds a Chainguard-specific hint when the registry
-// returns a FORBIDDEN. The free Chainguard catalog requires authentication
-// (chainctl login + configure-docker writes credentials Docker's keychain
-// reads); without it, anonymous token requests against cgr.dev return
-// 403 with no clue about why.
+// returns FORBIDDEN against cgr.dev. The seeded default registry is
+// docker.io/chainguard (anonymous pulls work); cgr.dev is reachable
+// only after `chainctl auth login` + `chainctl auth configure-docker`
+// writes credentials Docker's keychain reads. The hint helps users
+// who add cgr.dev as an additional registry and hit the 403 token
+// failure with no clue about why.
 func annotatePullError(err error, registryURL string) error {
 	if err == nil {
 		return nil

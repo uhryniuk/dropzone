@@ -6,7 +6,7 @@
 
 For each install, dropzone selects the manifest-list entry matching the host OS and architecture (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`). Images that don't ship a matching platform entry are not installable, dropzone reports this clearly and does not attempt translation or VM-based execution. In practice this means Linux-only image catalogs (such as Chainguard's current offering) work on Linux hosts; macOS hosts need images that explicitly ship `darwin/*` platforms.
 
-Signed images are the default, and signature verification is gated by a per-registry policy. Unsigned images refuse to install unless the user explicitly opts in with `--allow-unsigned`. The default registry is `cgr.dev/chainguard`, pre-configured with the correct cosign keyless identity policy. The out-of-the-box experience is to install CLI tools with a verified provenance trail: the binary came from a specific signing identity at a specific image digest, with whatever SBOM and SLSA provenance the publisher chose to attach.
+Signed images are the default, and signature verification is gated by a per-registry policy. Unsigned images refuse to install unless the user explicitly opts in with `--allow-unsigned`. On first run, dropzone seeds one registry: `docker.io/chainguard`, pre-configured with the correct cosign keyless identity policy. Chainguard publishes a public catalog of signed CLI tools, and `docker.io/chainguard` allows anonymous pulls, so it's a reasonable starting point for a new user. It is a recommended seed, not a hard-wired default; users can swap or supplement it with any other signed OCI registry. The out-of-the-box experience is to install CLI tools with a verified provenance trail: the binary came from a specific signing identity at a specific image digest, with whatever SBOM and SLSA provenance the publisher chose to attach.
 
 Dropzone stops at the signature. It does not make claims about whether the underlying image is minimal, CVE-patched, or hardened in any other content sense. Those are properties of how the image was built, attested by the publisher, and surfaced as install-time output for the user to read. Verifying the signature confirms who built it and which image digest they signed. Everything else flows from trusting that signing identity.
 
@@ -187,7 +187,7 @@ Package metadata records:
 default_registry: chainguard
 registries:
   - name: chainguard
-    url: cgr.dev/chainguard
+    url: docker.io/chainguard
     cosign_policy:
       issuer: https://token.actions.githubusercontent.com
       identity_regex: https://github.com/chainguard-images/images/.*

@@ -129,9 +129,9 @@ func TestClientCatalogUnavailableMappings(t *testing.T) {
 }
 
 func TestClientCatalogNamespaceFilter(t *testing.T) {
-	// Simulates a registry whose URL is configured with a namespace prefix:
-	// "cgr.dev/chainguard". The /v2/_catalog response still returns the full
-	// repo name ("chainguard/jq"); the Client strips the prefix.
+	// Simulates a registry whose URL is configured with a namespace prefix
+	// ("docker.io/chainguard", say). The /v2/_catalog response still returns
+	// the full repo name ("chainguard/jq"); the Client strips the prefix.
 	f := &fakeRegistry{
 		catalogStatus: http.StatusOK,
 		catalogBody: map[string]any{"repositories": []string{

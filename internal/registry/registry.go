@@ -33,7 +33,7 @@ type ResolvedRef struct {
 }
 
 // FullReference returns the reference string suitable for passing to
-// go-containerregistry (e.g., "cgr.dev/chainguard/jq:latest").
+// go-containerregistry (e.g., "docker.io/chainguard/jq:latest").
 func (r ResolvedRef) FullReference() string {
 	return r.Registry.URL + "/" + r.Image + ":" + r.Tag
 }

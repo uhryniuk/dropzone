@@ -151,7 +151,7 @@ Typical output:
 
 ```
 Resolving chainguard/jq...
-  → cgr.dev/chainguard/jq@sha256:abc123... (linux/amd64)
+  → docker.io/chainguard/jq@sha256:abc123... (linux/amd64)
 Verifying signature...
   ✓ Signed by https://github.com/chainguard-images/images/.github/workflows/release.yaml@refs/heads/main
   Attestations: SBOM (SPDX, 142), Provenance (github-actions/chainguard-images/images), Vuln (0C/0H/2M/7L)

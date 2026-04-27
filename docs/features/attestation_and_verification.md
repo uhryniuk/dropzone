@@ -125,7 +125,7 @@ Each installed package's `metadata.json` records:
 
 ### 7.2. Integration
 
-*   Verify a real Chainguard image (`cgr.dev/chainguard/jq:latest`). Expect success and Chainguard-identity in the result.
+*   Verify a real Chainguard image (`docker.io/chainguard/jq:latest`). Expect success and Chainguard-identity in the result.
 *   Verify with a mutated policy (wrong identity regex). Expect failure.
 *   Install a registry image with no policy and `--allow-unsigned`. Verify the unsigned warning appears and metadata records `signature_verified: false`.
 *   Install with no policy and no `--allow-unsigned`. Verify the abort message is clear.

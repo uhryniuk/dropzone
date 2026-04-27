@@ -652,13 +652,13 @@ func (a *App) newAddRegistryCommand() *cobra.Command {
 		Use:   "registry <name> <url>",
 		Short: "Register an OCI registry as a package source",
 		Long: `Register an OCI registry. URL can be a host ("docker.io") or a
-namespace path ("cgr.dev/chainguard"). Use --template for one of the
+namespace path ("docker.io/chainguard"). Use --template for one of the
 common signing providers, or --identity-issuer + --identity-regex for
 a custom cosign keyless policy. A registry without a policy will
 require --allow-unsigned at install time.
 
 Templates:
-  chainguard  fully-formed policy for cgr.dev's build pipeline
+  chainguard  fully-formed policy for Chainguard's build pipeline
   github      Issuer pinned to GitHub Actions; supply --identity-regex
   gitlab      Issuer pinned to GitLab; supply --identity-regex
   google      Issuer pinned to Google OIDC; supply --identity-regex

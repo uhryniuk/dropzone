@@ -20,7 +20,7 @@ The default `chainguard` registry is pre-seeded on first run with the correct co
 ```go
 type Registry struct {
     Name         string
-    URL          string        // e.g., "cgr.dev/chainguard"
+    URL          string        // e.g., "docker.io/chainguard" or "registry.example/path"
     CosignPolicy *CosignPolicy // nil means "no policy configured"
 }
 
@@ -37,7 +37,7 @@ type CosignPolicy struct {
     *   `Get(name string) (*Registry, error)`
     *   `Add(r Registry) error`, validate, persist to config.
     *   `Remove(name string) error`, remove from config. Fails if packages installed from this registry are still present (prompts the user to remove them first or pass `--force`).
-    *   `Resolve(ref string) (ResolvedRef, error)`, expand a short name (`jq`) against the default registry, or parse a fully qualified ref (`chainguard/jq:3.7` or `cgr.dev/chainguard/jq:3.7`).
+    *   `Resolve(ref string) (ResolvedRef, error)`, expand a short name (`jq`) against the default registry, or parse a fully qualified ref (`chainguard/jq:3.7` or `docker.io/chainguard/jq:3.7`).
 
 ### 3.3. `internal/registry/client.go`
 
@@ -60,7 +60,7 @@ On first run (triggered by `App.Initialize()`), if `~/.dropzone/config/config.ya
 default_registry: chainguard
 registries:
   - name: chainguard
-    url: cgr.dev/chainguard
+    url: docker.io/chainguard
     cosign_policy:
       issuer: https://token.actions.githubusercontent.com
       identity_regex: https://github.com/chainguard-images/images/.*
@@ -129,7 +129,7 @@ Hits `Tags()`. Expected to work even when `search` doesn't.
 ### 6.2. Integration
 
 *   Start the `registry:2` distribution image locally, push a test image, verify `Catalog`, `Tags`, `Digest`, `Pull` work end-to-end.
-*   Point at `cgr.dev/chainguard` in a network-enabled test; verify `Tags jq` returns plausible data. (Skip in CI if offline.)
+*   Point at `docker.io/chainguard` in a network-enabled test; verify `Tags jq` returns plausible data. (Skip in CI if offline.)
 *   `dz add registry` with each template, verify resulting config.
 *   `dz search` against a registry with catalog disabled prints the expected fallback message.
 

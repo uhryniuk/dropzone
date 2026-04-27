@@ -11,9 +11,16 @@ import (
 )
 
 // Default registry seed applied on first run when no config file exists.
+//
+// Chainguard publishes a public catalog of signed CLI tools that's a low-
+// friction starting point for new users (no account needed). We point the
+// default at their Docker Hub mirror because anonymous pulls work; their
+// primary registry at cgr.dev requires a free chainctl login. Users who
+// want cgr.dev can `dz add registry chainguard-cgr cgr.dev/chainguard`
+// or change `default_registry` in the config file.
 const (
 	chainguardName          = "chainguard"
-	chainguardURL           = "cgr.dev/chainguard"
+	chainguardURL           = "docker.io/chainguard"
 	chainguardIssuer        = "https://token.actions.githubusercontent.com"
 	chainguardIdentityRegex = "https://github.com/chainguard-images/images/.*"
 )

@@ -66,8 +66,8 @@ func (c *Client) Catalog(ctx context.Context, r *Registry) ([]string, error) {
 	}
 
 	// If the registry's URL includes a namespace prefix (e.g.,
-	// "cgr.dev/chainguard"), filter and strip it so the returned names are
-	// relative to the registry as configured.
+	// "docker.io/chainguard"), filter and strip it so the returned names
+	// are relative to the registry as configured.
 	prefix := namespacePrefix(r.URL)
 	if prefix == "" {
 		return names, nil
@@ -255,7 +255,7 @@ func (c *Client) resolveImage(desc *gcrremote.Descriptor, opts []gcrremote.Optio
 	return img, cfg.OS + "/" + cfg.Architecture, nil
 }
 
-// registryHost strips any namespace suffix from a URL (cgr.dev/chainguard → cgr.dev).
+// registryHost strips any namespace suffix from a URL (docker.io/chainguard → docker.io).
 func registryHost(url string) string {
 	if i := strings.Index(url, "/"); i >= 0 {
 		return url[:i]

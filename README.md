@@ -8,14 +8,18 @@ No container runtime is required at use time. The extracted binary runs natively
 
 Dropzone is the consumer side of signed OCI images: it pulls the image, verifies the signature against a registry-scoped identity policy, and runs the entrypoint binary natively on your host.
 
-1. Pull a signed OCI image from any registry. The default is `cgr.dev/chainguard`.
+1. Pull a signed OCI image from any registry.
 2. Verify the image signature with cosign against a per-registry identity policy. Fail closed unless `--allow-unsigned` is passed and the registry has no policy.
 3. Unpack the rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/` and write a wrapper script at `~/.dropzone/bin/<name>`.
 4. `dz update` queries the registry for digest drift on the installed tag (rebuilds of the same tag) and for newer tags.
 
 What dropzone gives you is a verified provenance trail: the binary at `~/.dropzone/bin/jq` came from this image, signed by this identity, attested to by this SBOM. What it does not do is judge image content. "Was this image built minimally?" or "Are there CVEs in here?" are questions for the publisher and the attached vulnerability-scan attestation, which dropzone surfaces but does not gate on.
 
-`dz install jq` against the default Chainguard registry verifies Chainguard's GitHub Actions signing identity and prints the SBOM and provenance summary. Any OCI registry works; unsigned images need `--allow-unsigned`.
+### The seeded starting point
+
+On first run, dropzone configures one registry: `docker.io/chainguard`. Chainguard publishes a public catalog of signed CLI tools and `docker.io/chainguard` allows anonymous pulls, which makes it a friendly low-friction starting point. The cosign policy attached to it pins the GitHub Actions identity Chainguard uses to sign their images.
+
+This is a recommended starting point, not a fixed default. You can change `default_registry` in `~/.dropzone/config/config.yaml` to anything else, add additional registries with `dz add registry`, or remove the chainguard entry entirely. Dropzone is registry-agnostic; the only requirement for fully-trusted installs is that whatever registry you point it at carries cosign signatures and you've configured an identity policy that matches who you trust to sign.
 
 ## Features
 
@@ -54,7 +58,7 @@ sudo mv dz /usr/local/bin/
 
 `CGO_ENABLED=0` produces a fully static binary on Linux. On macOS the result links only against system-provided frameworks.
 
-On first run, dropzone creates `~/.dropzone/` and seeds the default `chainguard` registry with the right cosign identity policy. It also prints how to add `~/.dropzone/bin` to your `PATH`, which `dz path setup` will do for you (zsh and bash).
+On first run, dropzone creates `~/.dropzone/` and seeds the `chainguard` registry pointed at `docker.io/chainguard` with the right cosign identity policy. It also prints how to add `~/.dropzone/bin` to your `PATH`, which `dz path setup` will do for you (zsh and bash).
 
 ## Usage
 

@@ -138,7 +138,7 @@ Not bugs; design trade-offs. Documented here so we don't pretend otherwise.
 
 ### 7.2. Integration
 
-*   Full install of `cgr.dev/chainguard/jq:latest` on Linux. Run the shimmed `jq --version` from the host shell; verify output.
+*   Full install of `docker.io/chainguard/jq:latest` on Linux. Run the shimmed `jq --version` from the host shell; verify output.
 *   Same on macOS, against whichever registry is shipping `darwin/*` images we can test with. If no darwin image is available at test time, verify the "no matching platform" error path.
 *   Install an image whose entrypoint is a shell script; verify the clear error message ("script entrypoints are not supported; install the non-Dev variant").
 *   Install an image built for the wrong arch (amd64 image on an arm64 host, with `--platform` hackery in the registry); verify the clear error at entrypoint validation.

@@ -100,7 +100,7 @@ func TestResolveTrimsWhitespace(t *testing.T) {
 func TestFullReferenceFormatsCorrectly(t *testing.T) {
 	m := seedManager(t)
 	ref, _ := m.Resolve("jq:1.7.1")
-	if got := ref.FullReference(); got != "cgr.dev/chainguard/jq:1.7.1" {
+	if got := ref.FullReference(); got != "docker.io/chainguard/jq:1.7.1" {
 		t.Errorf("FullReference: got %q", got)
 	}
 }
