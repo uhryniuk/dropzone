@@ -74,6 +74,7 @@ type InstallResult struct {
 	SignatureVerified bool
 	Signer            string
 	Issuer            string
+	Attestations      *cosign.Attestations
 }
 
 // InstallPackage performs the end-to-end install for a user-typed ref.
@@ -118,6 +119,17 @@ func (h *PackageHandler) InstallPackage(ctx context.Context, ref string, opts In
 		return nil, err
 	}
 
+	// Attestation fetch: best-effort, only meaningful for verified
+	// signatures (otherwise the attestations have no trust root). Failure
+	// here never blocks the install; we just skip the surfacing.
+	var atts *cosign.Attestations
+	if verifyResult.verified {
+		raws, ferr := h.registries.Client().FetchAttestations(ctx, *resolved, info.Digest)
+		if ferr == nil {
+			atts = cosign.SummarizeAttestations(raws)
+		}
+	}
+
 	util.LogInfo("Unpacking to package directory...")
 	pkgName := resolved.Image
 	result, err := shim.Build(shim.BuildInput{
@@ -143,6 +155,7 @@ func (h *PackageHandler) InstallPackage(ctx context.Context, ref string, opts In
 		InstalledAt:       time.Now().UTC(),
 		SignatureVerified: verifyResult.verified,
 		Signer:            verifyResult.signer,
+		Attestations:      atts,
 	}
 	if err := h.store.StoreMetadata(meta, digestDir); err != nil {
 		return nil, fmt.Errorf("store metadata: %w", err)
@@ -166,6 +179,7 @@ func (h *PackageHandler) InstallPackage(ctx context.Context, ref string, opts In
 		SignatureVerified: verifyResult.verified,
 		Signer:            verifyResult.signer,
 		Issuer:            verifyResult.issuer,
+		Attestations:      atts,
 	}, nil
 }
 

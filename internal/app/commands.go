@@ -85,6 +85,27 @@ func (a *App) newInstallCommand() *cobra.Command {
 				if result.Issuer != "" {
 					fmt.Fprintf(out, "  Issuer:    %s\n", result.Issuer)
 				}
+				if a := result.Attestations; a.HasAny() {
+					fmt.Fprintln(out, "  Attestations:")
+					if a.SBOM != nil {
+						fmt.Fprintf(out, "    SBOM:        %s (%d components)\n", strings.ToUpper(a.SBOM.Format), a.SBOM.ComponentCount)
+					}
+					if a.Provenance != nil {
+						label := a.Provenance.BuilderID
+						if label == "" {
+							label = a.Provenance.BuildType
+						}
+						fmt.Fprintf(out, "    Provenance:  %s\n", label)
+					}
+					if a.VulnScan != nil {
+						scanned := ""
+						if !a.VulnScan.ScannedAt.IsZero() {
+							scanned = " (scanned " + a.VulnScan.ScannedAt.Format("2006-01-02") + ")"
+						}
+						fmt.Fprintf(out, "    Vuln scan:   %dC / %dH / %dM / %dL%s\n",
+							a.VulnScan.Critical, a.VulnScan.High, a.VulnScan.Medium, a.VulnScan.Low, scanned)
+					}
+				}
 			} else {
 				fmt.Fprintln(out, "  Signature: not verified (--allow-unsigned)")
 			}

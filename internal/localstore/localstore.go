@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uhryniuk/dropzone/internal/cosign"
 	"github.com/uhryniuk/dropzone/internal/util"
 )
 
@@ -37,15 +38,16 @@ import (
 // updates don't overwrite history and rollback can read a previous
 // digest's metadata if we ever retain multiple digest dirs per package.
 type PackageMetadata struct {
-	Name              string    `json:"name"`
-	Tag               string    `json:"tag"`
-	Digest            string    `json:"digest"`
-	Registry          string    `json:"registry"`
-	Entrypoint        []string  `json:"entrypoint"`
-	Platform          string    `json:"platform"`
-	InstalledAt       time.Time `json:"installed_at"`
-	SignatureVerified bool      `json:"signature_verified"`
-	Signer            string    `json:"signer,omitempty"`
+	Name              string                `json:"name"`
+	Tag               string                `json:"tag"`
+	Digest            string                `json:"digest"`
+	Registry          string                `json:"registry"`
+	Entrypoint        []string              `json:"entrypoint"`
+	Platform          string                `json:"platform"`
+	InstalledAt       time.Time             `json:"installed_at"`
+	SignatureVerified bool                  `json:"signature_verified"`
+	Signer            string                `json:"signer,omitempty"`
+	Attestations      *cosign.Attestations  `json:"attestations,omitempty"`
 }
 
 // ErrNotInstalled is returned by lookup methods for a package with no
