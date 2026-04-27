@@ -1,42 +1,47 @@
 # Dropzone
 
-**Dropzone** is a consumer CLI that installs binaries from signed OCI container images directly onto your Linux or macOS host. It treats container registries as first-class package registries: add a registry, browse it, install the entrypoint binary, and keep it up-to-date with CVE-patched rebuilds — all with Sigstore-verified provenance.
+Dropzone is a CLI that installs binaries from signed OCI container images directly onto your Linux or macOS host. It treats container registries as package registries: add a registry, browse it, install the entrypoint binary, and keep it up to date with CVE-patched rebuilds. Provenance is verified through Sigstore.
 
-No container runtime at use time. The extracted binary runs natively against its bundled libraries.
+No container runtime is required at use time. The extracted binary runs natively against its bundled libraries.
 
 ## Concept
 
-The idea is simple: **hardened container images already exist — use them as your source of truth for binaries.**
+Hardened container images already exist. Dropzone uses them as the source of truth for binaries on your host.
 
-- **Pull** a signed OCI image from any registry (default: `cgr.dev/chainguard`).
-- **Verify** the signature with cosign against a per-registry identity policy.
-- **Shim** the entrypoint binary plus its dynamic library closure onto your `PATH`.
-- **Update** directly against the registry to pick up CVE-patch rebuilds of the same tag.
+1. Pull a signed OCI image from any registry. The default is `cgr.dev/chainguard`.
+2. Verify the image signature with cosign against a per-registry identity policy.
+3. Unpack the rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/` and write a wrapper script at `~/.dropzone/bin/<name>`.
+4. `dz update` queries the registry for digest drift on the installed tag (CVE-patch rebuilds) and for newer tags.
 
-Default registry is Chainguard, so `dz install jq` gives you a hardened, continuously-rebuilt `jq` with a cryptographic receipt. Any OCI registry is supported; unsigned images require `--allow-unsigned`.
+`dz install jq` gives you a Chainguard-built `jq` with a verified signing identity and an SBOM summary. Any OCI registry is supported; unsigned images require `--allow-unsigned`.
 
 ## Features
 
-*   **Registries as package registries** — `dz add registry`, `dz list registries`, `dz search`, `dz tags`. Walks the OCI distribution `/v2/` API directly.
-*   **Cosign verification by default** — per-registry policies pin the signer identity. Pre-seeded with the correct Chainguard policy.
-*   **Attestation surfacing** — install output shows signer identity, SBOM availability, SLSA provenance, and vulnerability-scan summary when present.
-*   **Digest-pinned updates** — `dz update` detects same-tag rebuilds (CVE patches) as well as new tags, not just version bumps.
-*   **Native execution** — the image's rootfs is unpacked and a wrapper script invokes the entrypoint with library paths pointing into the bundled rootfs. No container at runtime, no binary rewriting.
-*   **Conflict resolution** — overwrites other dropzone-managed binaries with a warning; skips system-installed binaries with a warning and explanation.
+* `dz install <ref> [--allow-unsigned]` and `dz remove <name>` for the lifecycle.
+* `dz add registry`, `dz list registries`, `dz remove registry`, `dz search`, `dz tags` for managing sources.
+* `dz update [<name>] [--check] [--all] [--yes]` detects same-tag digest drift and newer tags, applies updates atomically.
+* `dz rollback <name>` flips the package back to its previous digest directory.
+* `dz doctor [--fix]` reports orphan wrappers, broken symlinks, packages without wrappers, and PATH issues.
+* `dz path setup` and `dz path unset` manage the shell rc edit. Install never touches shell rc files on its own.
+* `dz login` and `dz logout` for private registries. Docker credentials work too via the chained keychain.
+* `dz purge` wipes `~/.dropzone/` after confirmation.
+* `dz list --json` for scripting. `dz completion {bash|zsh|fish|powershell}` for shell completion.
 
 ## Installation
 
 ### Prerequisites
 
--   **Linux** (x86_64 or aarch64) or **macOS** (x86_64 or arm64)
--   A **POSIX shell** at `/bin/sh` (used by per-package wrapper scripts)
--   **Go** (1.23+) if building from source
+* Linux (x86_64 or aarch64) or macOS (x86_64 or arm64).
+* A POSIX shell at `/bin/sh` for the per-package wrapper scripts.
+* Go 1.23 or newer if building from source.
 
-No runtime dependencies. Dropzone ships as a single Go binary — cosign and patchelf are **not** required on your host. Signature verification uses `sigstore-go` as an embedded library; the OCI registry client is `go-containerregistry`, also embedded. Install time is a tar-unpack plus a wrapper-script write; no binary rewriting.
+There are no runtime dependencies. Dropzone ships as a single Go binary. Cosign and patchelf are not required on your host. Signature verification uses `sigstore-go` as an embedded library, the OCI registry client is `go-containerregistry`, and binary integration is a tar unpack plus a wrapper script. No binary rewriting.
 
-> **Platform note:** dropzone installs whatever platform entry the registry resolves for your host. If an image ships only `linux/*` platforms, it is not installable on macOS. Chainguard's current catalog is Linux-only; hardened macOS images are a separate and emerging space.
+### Platform note
 
-### Build from Source
+Dropzone installs whatever platform entry the registry resolves for your host. If an image ships only `linux/*` platforms, it will not install on macOS. Chainguard's current public catalog is Linux-only.
+
+### Build from source
 
 ```bash
 git clone https://github.com/uhryniuk/dropzone.git
@@ -45,23 +50,18 @@ CGO_ENABLED=0 go build -o dz ./cmd/dropzone
 sudo mv dz /usr/local/bin/
 ```
 
-`CGO_ENABLED=0` produces a fully static binary on Linux. On macOS the result links against system-provided frameworks only (no cgo), which is the standard way to ship a dependency-free macOS tool.
+`CGO_ENABLED=0` produces a fully static binary on Linux. On macOS the result links only against system-provided frameworks.
 
-On first run, dropzone creates `~/.dropzone/` and prompts you to add `~/.dropzone/bin` to your `PATH`. The default `chainguard` registry is pre-configured.
+On first run, dropzone creates `~/.dropzone/` and seeds the default `chainguard` registry with the right cosign identity policy. It also prints how to add `~/.dropzone/bin` to your `PATH`, which `dz path setup` will do for you (zsh and bash).
 
 ## Usage
 
 ### Install a package
 
 ```bash
-# Short name — expanded against the default registry
-dz install jq
-
-# Fully qualified registry + image + tag
-dz install chainguard/jq:latest
-
-# Install from a registry without a configured signing policy
-dz install mycorp/internal-tool --allow-unsigned
+dz install jq                                 # short name, expanded against the default registry
+dz install chainguard/jq:1.7.1                # registry name + image + tag
+dz install mycorp/internal-tool --allow-unsigned   # registry without a configured policy
 ```
 
 ### Manage registries
@@ -69,51 +69,94 @@ dz install mycorp/internal-tool --allow-unsigned
 ```bash
 dz list registries
 
-# Add your company's hardened registry with a GitHub Actions signing policy
 dz add registry mycorp registry.mycorp.example/hardened \
-  --identity-issuer https://token.actions.githubusercontent.com \
+  --template github \
   --identity-regex 'https://github.com/mycorp/.*'
 
 dz remove registry mycorp
 ```
 
+The `--template` flag pre-fills the OIDC issuer for `github`, `gitlab`, `google`, and `chainguard`. The chainguard template ships fully formed; the others need `--identity-regex`. `--default` also flips the default registry to the one being added.
+
 ### Browse
 
 ```bash
-# List images in a registry (when /v2/_catalog is available)
-dz search --registry chainguard
-
-# List available tags for a specific image
-dz tags jq
+dz search                          # list images in the default registry's catalog (when /v2/_catalog is exposed)
+dz search openssl --registry chainguard
+dz tags jq                         # list tags for an image
 ```
 
-### List, update, remove
+Many registries (Docker Hub, GHCR) disable the catalog endpoint. In those cases `dz search` says so and `dz tags <image>` is the fallback.
+
+### List, update, remove, rollback
 
 ```bash
 dz list                  # installed packages
-dz update                # check every installed package against its source registry
-dz update jq             # just one package
+dz list --json           # machine-readable
+
+dz update                # status across all installed packages
+dz update jq             # check + prompt for one
+dz update --all --yes    # apply all available updates without prompting
+
 dz remove jq
+dz rollback jq           # flip back to the previous digest after a bad update
 ```
 
-## How it works
+### Authenticate to a private registry
 
-1. **Resolve** the reference to a registry + image + tag, then to a concrete digest, selecting the manifest entry for your host OS + arch.
-2. **Verify** the image signature via Sigstore against the registry's policy. Fail closed unless `--allow-unsigned`.
-3. **Unpack** the image's full rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/`. The container's libraries, loader, and bundled resources all come along.
-4. **Generate a wrapper script** at `~/.dropzone/bin/<name>` that invokes the entrypoint from the bundled rootfs with library-search env vars pointing at the rootfs's `lib` directories. No binary rewriting.
-5. **Record** the resolved digest in package metadata, so `dz update` can detect upstream rebuilds of the same tag.
+```bash
+dz login registry.mycorp.example -u alice
+echo "$TOKEN" | dz login ghcr.io -u alice --password-stdin
 
-## Roadmap
+dz logout registry.mycorp.example
+```
 
-Deferred from MVP, in rough priority order:
+Credentials are stored at `~/.dropzone/auth.json` (mode 0600) in the same format as Docker's `config.json`. The keychain falls through to Docker's config and credential helpers, so `docker login` continues to work.
 
--   `dz publish` — build + sign + push a hardened image for your own tools.
--   **Rollback** — restore the previous version after an update.
--   **Multiple binaries per image** — expose more than the entrypoint.
--   **Attestation-based install policies** — refuse images with open critical CVEs.
--   **Non-keyless signers** — support key-based cosign signatures.
--   **Non-Linux hosts.**
+### PATH integration
+
+```bash
+dz path                  # status: bin dir, on-PATH, shell, rc file, rc block presence
+dz path setup            # append a marked block to ~/.zshrc or ~/.bash_profile / ~/.bashrc
+dz path unset            # remove the marked block
+```
+
+### Diagnostics
+
+```bash
+dz doctor                # report drift between expected and on-disk state
+dz doctor --fix          # apply safe automatic remediations
+```
+
+## How install works
+
+1. Resolve the reference to a registry, image, and tag, then to a concrete digest. Pick the manifest entry that matches your host OS and arch.
+2. Verify the image signature with `sigstore-go` against the registry's policy. Fail closed unless `--allow-unsigned` is passed and the registry has no policy.
+3. If verified, fetch any in-toto attestations attached to the image and parse SBOM, SLSA provenance, and vulnerability-scan summaries.
+4. Unpack the image's full rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/`. The container's libraries, dynamic loader, and bundled resources all come along.
+5. Generate a POSIX wrapper script at `~/.dropzone/bin/<name>` that invokes the entrypoint from the bundled rootfs with library-search environment variables pointing at the rootfs's `lib` directories. The original binary is not modified.
+6. Record the resolved digest in package metadata so `dz update` can detect upstream rebuilds of the same tag.
+
+## Where things live
+
+```
+~/.dropzone/
+├── bin/                          per-package wrapper scripts
+├── packages/
+│   └── <name>/
+│       ├── current               symlink to the active digest dir
+│       └── <digest>/
+│           ├── rootfs/           full unpacked image
+│           └── metadata.json
+├── cache/                        registry catalog/tag cache
+├── config/
+│   └── config.yaml
+└── auth.json                     private-registry credentials (0600)
+```
+
+## Status
+
+v0.1 is feature-complete. See `docs/roadmap.md` for the per-phase build history and `BACKBURNER.md` for the deferred items (per-attestation cryptographic verification, attestation-based install policies, semver-aware tag ordering, layer deduplication, `dz publish`, Windows host support, and a few smaller polish items).
 
 ## License
 

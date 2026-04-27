@@ -2,9 +2,9 @@
 
 ## 1. Introduction
 
-`dropzone` is a consumer CLI for installing binaries out of signed OCI container images onto a Linux or macOS host. It treats OCI registries as first-class package registries: users can add registries, browse catalogs, list tags, install the entrypoint binary of an image, and check for updates — all against the live registry. The extracted binary runs natively on the host; no container runtime is involved at use time.
+`dropzone` is a consumer CLI for installing binaries out of signed OCI container images onto a Linux or macOS host. It treats OCI registries as first-class package registries: users can add registries, browse catalogs, list tags, install the entrypoint binary of an image, and check for updates, all against the live registry. The extracted binary runs natively on the host; no container runtime is involved at use time.
 
-For each install, dropzone selects the manifest-list entry matching the host OS and architecture (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`). Images that don't ship a matching platform entry are not installable — dropzone reports this clearly and does not attempt translation or VM-based execution. In practice this means Linux-only image catalogs (such as Chainguard's current offering) work on Linux hosts; macOS hosts need images that explicitly ship `darwin/*` platforms.
+For each install, dropzone selects the manifest-list entry matching the host OS and architecture (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`). Images that don't ship a matching platform entry are not installable, dropzone reports this clearly and does not attempt translation or VM-based execution. In practice this means Linux-only image catalogs (such as Chainguard's current offering) work on Linux hosts; macOS hosts need images that explicitly ship `darwin/*` platforms.
 
 Signed images are the default, and signature verification is gated by a per-registry policy. Unsigned images refuse to install unless the user explicitly opts in with `--allow-unsigned`. The default registry is `cgr.dev/chainguard`, pre-configured with the correct cosign keyless identity policy, so the out-of-the-box experience is "install hardened, continuously-rebuilt versions of common CLI tools with a cryptographic receipt."
 
@@ -74,12 +74,12 @@ Signed images are the default, and signature verification is gated by a per-regi
 
 Owns the list of configured registries. Talks the OCI distribution `/v2/` API directly via `google/go-containerregistry` as a Go library (no subprocess shell-outs to `docker` or `crane`). Exposes:
 
-*   `Catalog(registry)` — list repositories, via `/v2/_catalog`. Best-effort: registries that disable the endpoint return a typed "catalog unavailable" error that surfaces cleanly in the CLI.
-*   `Tags(registry, image)` — list tags via `/v2/<name>/tags/list`. Widely supported even when catalog is not.
-*   `Resolve(ref)` — resolve a reference (short name or fully qualified) to a registry + image + tag + digest.
-*   `Pull(ref, stagingDir)` — fetch the manifest, resolve the host-compatible entry from the manifest list, pull and flatten layers into a staging directory. Also returns the image config so the caller can read `Entrypoint`.
+*   `Catalog(registry)`, list repositories, via `/v2/_catalog`. Best-effort: registries that disable the endpoint return a typed "catalog unavailable" error that surfaces cleanly in the CLI.
+*   `Tags(registry, image)`, list tags via `/v2/<name>/tags/list`. Widely supported even when catalog is not.
+*   `Resolve(ref)`, resolve a reference (short name or fully qualified) to a registry + image + tag + digest.
+*   `Pull(ref, stagingDir)`, fetch the manifest, resolve the host-compatible entry from the manifest list, pull and flatten layers into a staging directory. Also returns the image config so the caller can read `Entrypoint`.
 
-Authentication uses the user's existing `~/.docker/config.json` and Docker credential helpers — `go-containerregistry` handles this natively.
+Authentication uses the user's existing `~/.docker/config.json` and Docker credential helpers, `go-containerregistry` handles this natively.
 
 Catalog and tag responses cache under `~/.dropzone/cache/<registry-name>/` with a short TTL. `dz update` forces a refresh.
 
@@ -101,7 +101,7 @@ Attestation surfacing: after signature verification, fetch SBOM + SLSA provenanc
 Given the staging filesystem from the registry pull and the entrypoint path from the image config:
 
 1.  Confirm `ENTRYPOINT[0]` exists in the rootfs and is an ELF (Linux hosts) or Mach-O (macOS hosts) matching the host CPU arch. Reject shell-script entrypoints, empty entrypoints, and binaries for the wrong OS/arch with a clear error.
-2.  Move (or copy) the entire staged rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/`. No closure walk, no ELF/Mach-O rewriting, no selective copy. The whole image filesystem is preserved so any runtime dep the binary reaches for — plugins, locale data, CA bundles, NSS modules bundled in the image — is present.
+2.  Move (or copy) the entire staged rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/`. No closure walk, no ELF/Mach-O rewriting, no selective copy. The whole image filesystem is preserved so any runtime dep the binary reaches for, plugins, locale data, CA bundles, NSS modules bundled in the image, is present.
 3.  Detect the dynamic loader inside the rootfs (best-effort, from a list of well-known paths: `/lib64/ld-linux-x86-64.so.2`, `/lib/ld-linux-aarch64.so.1`, `/lib/ld-musl-x86_64.so.1`, etc. on Linux; on macOS the loader is always the system's `dyld`, so there's nothing to bundle).
 4.  Generate a POSIX wrapper script at `~/.dropzone/bin/<name>` pointing at `~/.dropzone/packages/<name>/current/rootfs/<entrypoint>`. The wrapper sets library-search env vars to the bundled rootfs's `lib` directories and invokes the bundled loader directly (Linux) or relies on the system loader with a modified search path (macOS).
 
@@ -131,23 +131,24 @@ DYLD_FALLBACK_LIBRARY_PATH="$ROOT/usr/lib:$ROOT/lib:$DYLD_FALLBACK_LIBRARY_PATH"
     exec "$ROOT/<entrypoint>" "$@"
 ```
 
-Pointing at `current` (a symlink to the active digest directory) means updates don't need to touch the wrapper — flipping `current` is enough.
+Pointing at `current` (a symlink to the active digest directory) means updates don't need to touch the wrapper, flipping `current` is enough.
 
 If `ENTRYPOINT` has baked arguments (e.g., `["/usr/bin/tool", "--flag"]`), they're preserved verbatim before `"$@"`.
 
-Known limitations — documented, accepted, not worked around in MVP:
+Known limitations, documented, accepted, not worked around in MVP:
 
-*   The binary still runs against the *host's* `/etc` (resolv.conf, passwd, nsswitch), `/proc`, `/sys`, `/dev`, `/tmp`. No chroot, no namespaces — that would reintroduce a container runtime at use time.
+*   The binary still runs against the *host's* `/etc` (resolv.conf, passwd, nsswitch), `/proc`, `/sys`, `/dev`, `/tmp`. No chroot, no namespaces, that would reintroduce a container runtime at use time.
 *   Paths hard-coded into the binary as absolute (e.g., `/etc/ssl/certs/ca-certificates.crt`) resolve against the host, not the rootfs. For TLS-sensitive tools, users can set `SSL_CERT_FILE` via shell wrapper or we add per-package env hints post-MVP.
-*   macOS System Integrity Protection strips `DYLD_*` env vars in some contexts (system binaries launching children). For our case — user-installed binaries in `$HOME` — SIP does not strip, so the wrapper works.
+*   macOS System Integrity Protection strips `DYLD_*` env vars in some contexts (system binaries launching children). For our case, user-installed binaries in `$HOME`, SIP does not strip, so the wrapper works.
 
 ### 4.4. Host Integrator (`internal/hostintegration/`)
 
-Unchanged in concept from the pre-pivot code, and mostly reusable:
+Owns the dropzone-managed parts of the user environment: the bin directory and (only when explicitly requested) the shell rc file.
 
-*   `SetupDropzoneBinPath` ensures `~/.dropzone/bin` is on the user's `PATH` (bash / zsh supported; others get a printed instruction).
-*   `LinkPackageBinaries` symlinks `~/.dropzone/packages/<name>/<version>/bin/<entrypoint>` into `~/.dropzone/bin/<entrypoint>`. Conflict policy: dropzone-vs-dropzone overwrites with a warning; dropzone-vs-system skips with a warning.
-*   `UnlinkPackageBinaries` inverts the above.
+*   `SetupDropzoneBinPath` creates `~/.dropzone/bin` if missing and prints PATH advice when the directory is not on `$PATH`. It never edits shell rc files. That is reserved for the explicit `dz path setup` command.
+*   `InstallWrapper` writes the POSIX wrapper script generated by `internal/shim` into `~/.dropzone/bin/<name>` with mode 0755. A marker comment identifies the file as ours; subsequent `RemoveWrapper` and overwrite checks key off that marker so a user-written script at the same path is never touched.
+*   `RemoveWrapper` deletes the wrapper if and only if the marker is present. Files that are not dropzone wrappers are left in place.
+*   `SetupShellRC` and `UnsetShellRC` add or remove a clearly delimited block in `~/.zshrc` (zsh) or `~/.bash_profile` / `~/.bashrc` (bash, with `~/.bash_profile` preferred on macOS). Idempotent: the block is keyed by a marker so re-running is a no-op when present. `dz path` exposes the status.
 
 ### 4.5. Local Store (`internal/localstore/`)
 
@@ -201,22 +202,22 @@ No credential fields. Registry auth is delegated to Docker credential helpers.
 
 ### 5.1. Registry management
 
-*   `dz add registry <name> <url> [--template github|gitlab] [--identity-issuer <url>] [--identity-regex <regex>]` — register a new registry. Pre-seeded on first run with a `chainguard` entry.
-*   `dz list registries` — tabular output of configured registries and their policies.
-*   `dz remove registry <name>` — unregister.
+*   `dz add registry <name> <url> [--template github|gitlab] [--identity-issuer <url>] [--identity-regex <regex>]`, register a new registry. Pre-seeded on first run with a `chainguard` entry.
+*   `dz list registries`, tabular output of configured registries and their policies.
+*   `dz remove registry <name>`, unregister.
 
 ### 5.2. Discovery
 
-*   `dz search [<term>] [--registry <name>]` — list repositories in a registry via `/v2/_catalog`. Gracefully prints "catalog unavailable" when the registry disables the endpoint.
-*   `dz tags <image> [--registry <name>]` — list tags for a specific image.
+*   `dz search [<term>] [--registry <name>]`, list repositories in a registry via `/v2/_catalog`. Gracefully prints "catalog unavailable" when the registry disables the endpoint.
+*   `dz tags <image> [--registry <name>]`, list tags for a specific image.
 
 ### 5.3. Lifecycle
 
-*   `dz install <ref> [--allow-unsigned]` — pull, verify, shim, link. `<ref>` may be a short name (expanded against `default_registry`) or fully qualified.
-*   `dz list` — installed packages with their source registry and current tag/digest.
-*   `dz update [<name>]` — for each installed package, query the source registry's tag list, compare installed digest to current digest for the installed tag, and prompt for re-install if the digest has moved (same-tag rebuilds) or offer upgrade to a newer tag.
-*   `dz remove <name>` — unshim and delete.
-*   `dz version` — print the dropzone binary version.
+*   `dz install <ref> [--allow-unsigned]`, pull, verify, shim, link. `<ref>` may be a short name (expanded against `default_registry`) or fully qualified.
+*   `dz list`, installed packages with their source registry and current tag/digest.
+*   `dz update [<name>]`, for each installed package, query the source registry's tag list, compare installed digest to current digest for the installed tag, and prompt for re-install if the digest has moved (same-tag rebuilds) or offer upgrade to a newer tag.
+*   `dz remove <name>`, unshim and delete.
+*   `dz version`, print the dropzone binary version.
 
 ## 6. Install flow
 
@@ -237,17 +238,17 @@ For each installed package (or the named one):
 1.  Look up source registry + image + installed tag + installed digest from metadata.
 2.  Hit `/v2/<name>/tags/list` for the registry. If the installed tag is a floating tag (e.g., `latest`, `3.7`), also resolve that tag's current digest.
 3.  Report two kinds of update:
-    *   **Same tag, new digest** — a CVE-patch rebuild. Prompt to re-install to pick up the patch.
-    *   **New tag** — a newer version available. Prompt to move.
+    *   **Same tag, new digest**, a CVE-patch rebuild. Prompt to re-install to pick up the patch.
+    *   **New tag**, a newer version available. Prompt to move.
 4.  On confirmation, re-run the install flow, then clean up the old package directory.
 
-This is the feature that makes the registry feel like a real registry — installed packages track upstream rebuilds, not just new version numbers.
+This is the feature that makes the registry feel like a real registry, installed packages track upstream rebuilds, not just new version numbers.
 
 ## 8. Security model
 
-Trust flows from a registry's cosign policy. Verification is keyless / Sigstore-based. A verified signature says: "an identity matching the registry's configured policy signed this specific image digest." For the Chainguard default, that identity is the `chainguard-images/images` repository's GitHub Actions runner — so a verified signature is evidence the image came out of Chainguard's hardened build pipeline.
+Trust flows from a registry's cosign policy. Verification is keyless / Sigstore-based. A verified signature says: "an identity matching the registry's configured policy signed this specific image digest." For the Chainguard default, that identity is the `chainguard-images/images` repository's GitHub Actions runner, so a verified signature is evidence the image came out of Chainguard's hardened build pipeline.
 
-Attestations layered on top of signatures — SBOM, SLSA provenance, vulnerability scan — are surfaced to the user but not themselves gating. The gating decision is "is this signature valid under the registry's policy?"
+Attestations layered on top of signatures, SBOM, SLSA provenance, vulnerability scan, are surfaced to the user but not themselves gating. The gating decision is "is this signature valid under the registry's policy?"
 
 `--allow-unsigned` bypasses verification entirely and is logged in the package metadata as `signature_verified: false`. `dz list` surfaces unsigned installs distinctly.
 
@@ -259,12 +260,15 @@ Known non-coverage, called out explicitly so we don't pretend otherwise:
 
 ## 9. Future work
 
-Called out so the design stays minimal now without losing track of obvious extensions:
+The shipped feature set covers v0.1 end to end. Items that are deferred (with rationale) live in `BACKBURNER.md`. The headline ones:
 
-*   **`dz publish`** — a build + push + cosign-sign flow for users who want to ship their own hardened images through dropzone.
-*   **Multiple binaries per image** — honor `CMD` or additional image labels to expose more than one binary.
-*   **Rollback** — keep the previous package directory around after an update so `dz rollback <name>` can restore it.
-*   **Attestation-based install policies** — e.g., "refuse to install images with open critical CVEs per the attached vuln scan." Requires a policy language.
-*   **Non-keyless signers** — support signing keys in addition to identity-based verification.
-*   **Non-Linux hosts.**
-*   **Dependency resolution** — packages that declare they depend on other packages.
+*   **`dz publish`**: a build, sign, and push flow for users who want to ship their own hardened images through dropzone.
+*   **Multiple binaries per image**: honor `CMD` or additional image labels to expose more than one binary per image.
+*   **Attestation-based install policies**: a way to refuse images with open critical CVEs per the attached vuln scan, and similar gating rules. Requires a small policy language.
+*   **Per-attestation cryptographic verification**: today we surface the in-toto statement contents but trust derives from the image-level signature; verifying each DSSE envelope independently is a future enhancement.
+*   **Non-keyless signers**: support signing keys in addition to identity-based verification.
+*   **Semver-aware tag ordering** for `dz update`: the lexicographic ordering plus floating-tag exclusion is good enough for most cases but a real semver comparator would handle pre-release suffixes correctly.
+*   **Layer deduplication across packages**: a content-addressed layer store with hard links would cut disk usage on hosts with many installs.
+*   **Auto env-var hints** when the bundled rootfs contains a recognizable CA bundle, timezone database, or locale data.
+*   **Windows hosts.**
+*   **Dependency resolution between packages.**

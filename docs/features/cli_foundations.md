@@ -20,7 +20,7 @@ Entry point. Constructs the `App`, calls `SetupCommands()`, runs `cobra.Execute(
 
 ### 3.2. `internal/app/`
 
-*   `App` struct holds: `Config`, `LocalStore`, `RegistryManager`, `CosignVerifier`, `ShimBuilder`, `HostIntegrator`. Records detected host OS (`runtime.GOOS`) and arch (`runtime.GOARCH`) — used by the Registry Manager for manifest-list platform selection and by the Shim Builder for entrypoint format validation.
+*   `App` struct holds: `Config`, `LocalStore`, `RegistryManager`, `CosignVerifier`, `ShimBuilder`, `HostIntegrator`. Records detected host OS (`runtime.GOOS`) and arch (`runtime.GOARCH`), used by the Registry Manager for manifest-list platform selection and by the Shim Builder for entrypoint format validation.
 *   `Initialize()` is idempotent: create `~/.dropzone/` subdirectories if missing, load config, seed the default `chainguard` registry entry if the config file doesn't exist yet, set up `~/.dropzone/bin` on `PATH` if needed (shell-aware, see host_integration.md). Refuses to run on any `runtime.GOOS` that isn't `linux` or `darwin`.
 
 ### 3.3. `internal/app/commands.go`
@@ -52,7 +52,7 @@ Notes:
 
 ### 3.4. `internal/config/config.go`
 
-Config schema (see DESIGN.md §4.6). No credential fields — auth is delegated to Docker credential helpers via `go-containerregistry`.
+Config schema (see DESIGN.md §4.6). No credential fields, auth is delegated to Docker credential helpers via `go-containerregistry`.
 
 ```go
 type Config struct {
@@ -78,11 +78,11 @@ If `CosignPolicy` is nil, every install from that registry requires `--allow-uns
 
 On-disk layout per DESIGN.md §4.5. Responsibilities:
 
-*   `Init()` — create subdirectories, seed config if missing.
-*   `GetPackagePath(name, version)` — path to an installed package directory.
-*   `StorePackageMetadata(metadata)` / `GetPackageMetadata(name, version)` — per-install metadata.
-*   `GetAllInstalled()` — for `dz list`.
-*   `CacheCatalog(registry, data)` / `GetCachedCatalog(registry)` — catalog + tags cache with TTL.
+*   `Init()`, create subdirectories, seed config if missing.
+*   `GetPackagePath(name, version)`, path to an installed package directory.
+*   `StorePackageMetadata(metadata)` / `GetPackageMetadata(name, version)`, per-install metadata.
+*   `GetAllInstalled()`, for `dz list`.
+*   `CacheCatalog(registry, data)` / `GetCachedCatalog(registry)`, catalog + tags cache with TTL.
 
 ### 3.6. `internal/util/util.go`
 
@@ -111,5 +111,5 @@ Unchanged from the current code. Provides `GetHomeDir`, `FileExists`, `CreateDir
 
 ## 6. Open questions
 
-*   Shell completion (bash / zsh / fish) — nice-to-have, not MVP.
-*   A `dz doctor` command that checks `~/.dropzone/bin` on `PATH`, package dir consistency (`current` symlink points at a real digest dir, wrappers exist for every installed package), and config health — plausibly MVP, small scope.
+*   Shell completion (bash / zsh / fish), nice-to-have, not MVP.
+*   A `dz doctor` command that checks `~/.dropzone/bin` on `PATH`, package dir consistency (`current` symlink points at a real digest dir, wrappers exist for every installed package), and config health, plausibly MVP, small scope.

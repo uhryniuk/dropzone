@@ -1,6 +1,6 @@
 # Backburner
 
-Things we've consciously deferred. Not open questions (those live in the relevant feature doc) — things we've decided to come back to, with enough context to pick them up later.
+Things we've consciously deferred. Not open questions (those live in the relevant feature doc), things we've decided to come back to, with enough context to pick them up later.
 
 Grouped by theme. Each entry ends with the file that triggered the decision so future-you can find the surrounding discussion.
 
@@ -8,7 +8,7 @@ Grouped by theme. Each entry ends with the file that triggered the decision so f
 
 - **Setuid preservation during rootfs unpack.** The tar extractor drops setuid/setgid bits. Fine for MVP (CLI tools, user-writable files with setuid are noisy), but binaries that legitimately depend on elevated privileges won't work. Revisit when we hit a real case. See `docs/features/binary_shimming.md` §5.5.
 - **Auto-set environment hints.** When the unpacked rootfs contains a recognizable CA bundle (`/etc/ssl/certs/ca-certificates.crt`), timezone database (`/usr/share/zoneinfo`), or locale data (`/usr/lib/locale`), the wrapper could auto-set `SSL_CERT_FILE` / `TZDIR` / `LOCPATH`. Directly addresses the "host /etc bleedthrough" design decision for the common TLS-sensitive case. Low-risk post-MVP enhancement. See `docs/features/binary_shimming.md` §8 and `DESIGN.md` §8.
-- **Static binary fast-path.** If `ENTRYPOINT[0]` is a static ELF with zero `DT_NEEDED` entries, we don't need to unpack the whole rootfs — just extract the binary. Real disk win for Chainguard's static images (`distroless`, `wolfi-base`, etc.). Skipped because the general rootfs-unpack path subsumes it. See `docs/features/binary_shimming.md` §8.
+- **Static binary fast-path.** If `ENTRYPOINT[0]` is a static ELF with zero `DT_NEEDED` entries, we don't need to unpack the whole rootfs, just extract the binary. Real disk win for Chainguard's static images (`distroless`, `wolfi-base`, etc.). Skipped because the general rootfs-unpack path subsumes it. See `docs/features/binary_shimming.md` §8.
 
 ## Disk usage
 
@@ -20,7 +20,7 @@ Grouped by theme. Each entry ends with the file that triggered the decision so f
 - **`dz rollback <name>`.** With the digest-as-directory layout, rollback is literally a symlink flip (`packages/<name>/current` → previous digest dir). Trivially implementable once `dz update` exists. Worth shipping early because CVE-patch updates occasionally break things and users will want an undo. See `docs/features/update_flow.md` §8.
 - **`dz doctor`.** Reconciles drift: wrappers without packages, packages without wrappers, broken `current` symlinks, orphan digest directories, `~/.dropzone/bin` not on `PATH`. Small code surface, high user-confidence payoff. See `docs/features/cli_foundations.md` §6 and `docs/features/host_integration.md` §7.
 - **`dz path` helper.** Prints the `PATH` export snippet for users on fish, nushell, tcsh, and anything else we don't auto-configure. One-liner command. See `docs/features/host_integration.md` §7.
-- **`dz purge`.** Wipe `~/.dropzone/` entirely — useful for uninstalling dropzone itself without leftovers. See `docs/features/listing_and_removal.md` §7.
+- **`dz purge`.** Wipe `~/.dropzone/` entirely, useful for uninstalling dropzone itself without leftovers. See `docs/features/listing_and_removal.md` §7.
 - **`dz list --json`.** Scriptable output. See `docs/features/listing_and_removal.md` §7.
 - **Shell completion (bash / zsh / fish).** See `docs/features/cli_foundations.md` §6.
 
@@ -39,7 +39,7 @@ Grouped by theme. Each entry ends with the file that triggered the decision so f
 
 ## Update ergonomics
 
-- **Auto-update hooks.** A cron-safe `dz update --all --yes --quiet` exit mode. Tempting and dangerous — auto-rolling production tools without eyes on them is how you find out `latest` just got a breaking change. Include with prominent warning, or punt. See `docs/features/update_flow.md` §8.
+- **Auto-update hooks.** A cron-safe `dz update --all --yes --quiet` exit mode. Tempting and dangerous, auto-rolling production tools without eyes on them is how you find out `latest` just got a breaking change. Include with prominent warning, or punt. See `docs/features/update_flow.md` §8.
 - **`--notify-only` mode.** Just produces the "X updates available" summary for shell prompts / status lines. Trivial post-MVP. See `docs/features/update_flow.md` §8.
 - **Moving-tag reinstall → update routing.** If `dz install jq:latest` is re-run and the digest changed, today we treat it as a plain reinstall. Could detect and route through the update flow for consistency. See `docs/features/install_flow.md` §8.
 
@@ -47,4 +47,4 @@ Grouped by theme. Each entry ends with the file that triggered the decision so f
 
 Add items here when we *decide not to do something now* but *want to do it later*. Each entry should have enough context that someone (you, future you, a contributor) can pick it up without re-deriving why it matters. Remove items when they ship.
 
-Open questions — "should we do X or Y?" — stay in the relevant feature doc. This file is for things we've committed to revisiting.
+Open questions, "should we do X or Y?", stay in the relevant feature doc. This file is for things we've committed to revisiting.

@@ -6,7 +6,7 @@ Every `dz install` verifies the source image's Sigstore signature against a per-
 
 Post-signature, dropzone fetches available attestations (SBOM, SLSA provenance, vulnerability scan) and surfaces a summary in the install output. Attestations are informational for MVP, not gating.
 
-All verification is done in-process via `github.com/sigstore/sigstore-go`. There is no external `cosign` binary dependency — the dropzone binary itself ships statically.
+All verification is done in-process via `github.com/sigstore/sigstore-go`. There is no external `cosign` binary dependency, the dropzone binary itself ships statically.
 
 ## 2. Goals
 
@@ -19,8 +19,8 @@ All verification is done in-process via `github.com/sigstore/sigstore-go`. There
 
 ### 3.1. `internal/cosign/verifier.go`
 
-*   **`Verifier`** — constructed with a `CosignPolicy` and a `sigstore-go` verifier instance (configured with the Sigstore public-good trust root by default; overridable for private Sigstore instances post-MVP).
-*   **`Verify(ctx, imageRef name.Reference, digest v1.Hash) (*VerificationResult, error)`** —
+*   **`Verifier`**, constructed with a `CosignPolicy` and a `sigstore-go` verifier instance (configured with the Sigstore public-good trust root by default; overridable for private Sigstore instances post-MVP).
+*   **`Verify(ctx, imageRef name.Reference, digest v1.Hash) (*VerificationResult, error)`**:
     1.  Fetch the Sigstore bundle for the image digest. Bundles may be stored:
         *   As an OCI artifact in the same registry, referenced via the OCI 1.1 referrers API (preferred, modern).
         *   As a sidecar tag following the `sha256-<digest>.sig` convention (legacy, still common).
@@ -33,7 +33,7 @@ All verification is done in-process via `github.com/sigstore/sigstore-go`. There
     3.  On success, extract the signing identity from the certificate subject and return it.
     4.  On failure, return a typed `ErrSignatureInvalid` with the verification failure reason.
 
-*   **`VerificationResult`** — `{SignerIdentity, Issuer, Digest, VerifiedAt}`. Persisted into package metadata.
+*   **`VerificationResult`**, `{SignerIdentity, Issuer, Digest, VerifiedAt}`. Persisted into package metadata.
 
 ### 3.2. `internal/cosign/attestations.go`
 
@@ -41,16 +41,16 @@ Attestation fetch runs after signature verification. All failures here are non-f
 
 In-toto attestations ship in the same Sigstore bundle format (a DSSE envelope with a signed in-toto statement). `sigstore-go` can verify and unwrap these directly. The attestation predicate type determines what we're looking at.
 
-*   **`FetchSBOM(ctx, imageRef, digest) (*SBOMSummary, error)`** — fetch attestations for the digest, pick the first with predicate type `https://spdx.dev/Document` or `https://cyclonedx.org/bom`. Parse the SBOM JSON, return `{Format, ComponentCount}`.
-*   **`FetchProvenance(ctx, imageRef, digest) (*ProvenanceSummary, error)`** — find the attestation with predicate type `https://slsa.dev/provenance/v1` (or v0.2), extract `{BuilderID, BuildType, InvocationID}`.
-*   **`FetchVulnScan(ctx, imageRef, digest) (*VulnSummary, error)`** — find the attestation with predicate type for vulnerability scans (e.g., `https://cosign.sigstore.dev/attestation/vuln/v1`), parse for `{CriticalCount, HighCount, MediumCount, LowCount, ScannedAt}`.
+*   **`FetchSBOM(ctx, imageRef, digest) (*SBOMSummary, error)`**, fetch attestations for the digest, pick the first with predicate type `https://spdx.dev/Document` or `https://cyclonedx.org/bom`. Parse the SBOM JSON, return `{Format, ComponentCount}`.
+*   **`FetchProvenance(ctx, imageRef, digest) (*ProvenanceSummary, error)`**, find the attestation with predicate type `https://slsa.dev/provenance/v1` (or v0.2), extract `{BuilderID, BuildType, InvocationID}`.
+*   **`FetchVulnScan(ctx, imageRef, digest) (*VulnSummary, error)`**, find the attestation with predicate type for vulnerability scans (e.g., `https://cosign.sigstore.dev/attestation/vuln/v1`), parse for `{CriticalCount, HighCount, MediumCount, LowCount, ScannedAt}`.
 
 If a predicate type isn't present, the fetcher returns a typed `ErrAttestationNotAvailable`. The CLI surfaces this as a one-liner ("vuln scan: not available") rather than treating it as a failure.
 
 ### 3.3. `internal/cosign/policy.go`
 
 *   **`CosignPolicy`** mirrors the config type. Validation: both fields non-empty.
-*   **`ApplyTemplate(name string) CosignPolicy`** — returns the base policy for `github`, `gitlab`, `chainguard`. The caller fills in `identity_regex` for non-Chainguard templates.
+*   **`ApplyTemplate(name string) CosignPolicy`**, returns the base policy for `github`, `gitlab`, `chainguard`. The caller fills in `identity_regex` for non-Chainguard templates.
 
 ### 3.4. `internal/registry/bundle.go`
 
@@ -142,5 +142,5 @@ Each installed package's `metadata.json` records:
 
 *   **Key-based cosign signatures.** Some registries use a key pair instead of keyless. Out of MVP; policy schema would need a `public_key:` field and the verifier path would skip Fulcio / Rekor checks.
 *   **Policy language for gating on attestations.** "Refuse if vuln_scan.critical > 0" is a clear next step but requires a policy DSL. Deferred.
-*   **Rekor transparency log entry display.** Surfacing the Rekor entry UUID in the install output is trivial — `sigstore-go` already has it after verification. Include in MVP.
+*   **Rekor transparency log entry display.** Surfacing the Rekor entry UUID in the install output is trivial, `sigstore-go` already has it after verification. Include in MVP.
 *   **Private Sigstore instances.** Enterprises sometimes run their own Fulcio + Rekor. `sigstore-go` supports pointing at a custom TUF root. Post-MVP via config, probably per-registry.

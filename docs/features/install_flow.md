@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-`dz install <ref>` is the end-to-end composition of every other feature. This doc describes the orchestration — how the Registry Manager, Cosign Verifier, Shim Builder, Host Integrator, and Local Store are wired together for a single install.
+`dz install <ref>` is the end-to-end composition of every other feature. This doc describes the orchestration, how the Registry Manager, Cosign Verifier, Shim Builder, Host Integrator, and Local Store are wired together for a single install.
 
 ## 2. Goals
 
@@ -94,7 +94,7 @@
 
 ### 4.1. `internal/packagehandler/install.go`
 
-*   **`InstallPackage(ctx, ref string, opts InstallOptions) (*InstallResult, error)`** — implements the flow above.
+*   **`InstallPackage(ctx, ref string, opts InstallOptions) (*InstallResult, error)`**, implements the flow above.
 
 ```go
 type InstallOptions struct {
@@ -117,8 +117,8 @@ type InstallResult struct {
 ### 4.2. Staging and cleanup
 
 *   Staging directory created via `os.MkdirTemp("", "dz-install-*")`.
-*   `defer os.RemoveAll(stagingDir)` runs unconditionally — the Shim Builder copies what it needs into `~/.dropzone/packages/<name>/<version>/` before returning.
-*   If any step 3–10 fails, the staging directory is cleaned up and the package directory (if partially created) is removed. Steps 1–2 don't touch disk.
+*   `defer os.RemoveAll(stagingDir)` runs unconditionally, the Shim Builder copies what it needs into `~/.dropzone/packages/<name>/<version>/` before returning.
+*   If any step 3-10 fails, the staging directory is cleaned up and the package directory (if partially created) is removed. Steps 1-2 don't touch disk.
 
 ### 4.3. Name conflict on install
 
@@ -131,21 +131,21 @@ The "package name" is derived from the image name (last path segment of the imag
 
 Each step is either atomic or has a cleanup path:
 
-*   Steps 1–5 (network): failure → immediate abort, no disk state.
+*   Steps 1-5 (network): failure → immediate abort, no disk state.
 *   Step 6 (unpack): failure → staging dir is removed.
-*   Steps 7–8 (identify + install): failure → staging dir + partial package dir removed.
+*   Steps 7-8 (identify + install): failure → staging dir + partial package dir removed.
 *   Step 9 (metadata): failure → package dir removed.
 *   Step 10 (current flip + wrapper): failure → package dir retained (user can retry `dz` internals to re-link), error shown.
 
-Step 10 failing is the one non-transactional case — we keep the package on disk but report the broken wrapper / symlink state. A `dz link <name>` repair command is cheap to add if this proves annoying.
+Step 10 failing is the one non-transactional case, we keep the package on disk but report the broken wrapper / symlink state. A `dz link <name>` repair command is cheap to add if this proves annoying.
 
 ## 5. CLI integration
 
 ### `dz install <ref> [flags]`
 
-*   `--allow-unsigned` — see attestation doc.
-*   `--yes` / `-y` — skip confirmation on reinstall.
-*   `--smoke-test` — run the binary with `--version` after install.
+*   `--allow-unsigned`, see attestation doc.
+*   `--yes` / `-y`, skip confirmation on reinstall.
+*   `--smoke-test`, run the binary with `--version` after install.
 
 Typical output:
 

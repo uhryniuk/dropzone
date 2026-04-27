@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Registries are first-class. Users add OCI registries (`dz add registry`), list them, browse their catalogs (`dz search`), list tags for a specific image (`dz tags`), and install from them. Every registry has a name, a URL, and an optional cosign policy. No registry-level credential storage — auth is delegated to Docker credential helpers via `go-containerregistry`.
+Registries are first-class. Users add OCI registries (`dz add registry`), list them, browse their catalogs (`dz search`), list tags for a specific image (`dz tags`), and install from them. Every registry has a name, a URL, and an optional cosign policy. No registry-level credential storage, auth is delegated to Docker credential helpers via `go-containerregistry`.
 
 The default `chainguard` registry is pre-seeded on first run with the correct cosign identity policy for Chainguard's build pipeline.
 
@@ -11,7 +11,7 @@ The default `chainguard` registry is pre-seeded on first run with the correct co
 *   Talk to OCI registries as first-class package registries, using `/v2/_catalog`, `/v2/<name>/tags/list`, and manifest endpoints directly. No `docker pull` subprocessing.
 *   One clean abstraction: a `Registry` is a `{name, url, cosign_policy}`. No type field, no factory, no multi-backend inheritance. All registries speak OCI.
 *   Support user-added registries with policy templates (`--template github`, `--template gitlab`) for the common case, plus raw `--identity-issuer` and `--identity-regex` fields for anything else.
-*   Degrade gracefully when a registry disables `/v2/_catalog` — which many do.
+*   Degrade gracefully when a registry disables `/v2/_catalog`, which many do.
 
 ## 3. Components
 
@@ -32,21 +32,21 @@ type CosignPolicy struct {
 
 ### 3.2. `internal/registry/manager.go`
 
-*   **`Manager`** — owns the list of configured registries, loaded from config. Exposes:
+*   **`Manager`**, owns the list of configured registries, loaded from config. Exposes:
     *   `List() []Registry`
     *   `Get(name string) (*Registry, error)`
-    *   `Add(r Registry) error` — validate, persist to config.
-    *   `Remove(name string) error` — remove from config. Fails if packages installed from this registry are still present (prompts the user to remove them first or pass `--force`).
-    *   `Resolve(ref string) (ResolvedRef, error)` — expand a short name (`jq`) against the default registry, or parse a fully qualified ref (`chainguard/jq:3.7` or `cgr.dev/chainguard/jq:3.7`).
+    *   `Add(r Registry) error`, validate, persist to config.
+    *   `Remove(name string) error`, remove from config. Fails if packages installed from this registry are still present (prompts the user to remove them first or pass `--force`).
+    *   `Resolve(ref string) (ResolvedRef, error)`, expand a short name (`jq`) against the default registry, or parse a fully qualified ref (`chainguard/jq:3.7` or `cgr.dev/chainguard/jq:3.7`).
 
 ### 3.3. `internal/registry/client.go`
 
 Wraps `google/go-containerregistry` for the `/v2/` operations. All calls use Docker credential helpers for auth; we don't store credentials ourselves.
 
-*   **`Catalog(ctx, r *Registry) ([]string, error)`** — `GET /v2/_catalog`. On `404`, `401`, or `405`, returns a typed `ErrCatalogUnavailable` so the CLI can print a clear message.
-*   **`Tags(ctx, r *Registry, image string) ([]string, error)`** — `GET /v2/<image>/tags/list`. Expected to work even when catalog doesn't.
-*   **`Digest(ctx, r *Registry, image, tag string) (string, error)`** — resolves a tag to the current digest. Used by `dz update` to detect rebuilds.
-*   **`Pull(ctx, r *Registry, ref ResolvedRef, stagingDir string) (*ImageConfig, error)`** — resolves the manifest, picks the host-compatible entry from a manifest list, pulls and flattens layers into `stagingDir`, returns the image config (which includes `Entrypoint`).
+*   **`Catalog(ctx, r *Registry) ([]string, error)`**, `GET /v2/_catalog`. On `404`, `401`, or `405`, returns a typed `ErrCatalogUnavailable` so the CLI can print a clear message.
+*   **`Tags(ctx, r *Registry, image string) ([]string, error)`**, `GET /v2/<image>/tags/list`. Expected to work even when catalog doesn't.
+*   **`Digest(ctx, r *Registry, image, tag string) (string, error)`**, resolves a tag to the current digest. Used by `dz update` to detect rebuilds.
+*   **`Pull(ctx, r *Registry, ref ResolvedRef, stagingDir string) (*ImageConfig, error)`**, resolves the manifest, picks the host-compatible entry from a manifest list, pulls and flattens layers into `stagingDir`, returns the image config (which includes `Entrypoint`).
 
 ### 3.4. `internal/registry/cache.go`
 
@@ -70,9 +70,9 @@ registries:
 
 `dz add registry` accepts `--template <name>` as a shortcut for common provider identity pins:
 
-*   `--template github` — `issuer: https://token.actions.githubusercontent.com`. Requires `--identity-regex`.
-*   `--template gitlab` — `issuer: https://gitlab.com`. Requires `--identity-regex`.
-*   `--template chainguard` — full Chainguard policy. No extra fields required.
+*   `--template github`, `issuer: https://token.actions.githubusercontent.com`. Requires `--identity-regex`.
+*   `--template gitlab`, `issuer: https://gitlab.com`. Requires `--identity-regex`.
+*   `--template chainguard`, full Chainguard policy. No extra fields required.
 
 Without a template, the user supplies `--identity-issuer` and `--identity-regex` directly. Without either, the registry is added with no policy and every install from it requires `--allow-unsigned`.
 
@@ -83,7 +83,7 @@ Without a template, the user supplies `--identity-issuer` and `--identity-regex`
 *   `--template github|gitlab|chainguard`
 *   `--identity-issuer <url>`
 *   `--identity-regex <regex>`
-*   `--default` — also set `default_registry` to this.
+*   `--default`, also set `default_registry` to this.
 
 Validates that `<name>` is unique and `<url>` is a reachable registry (attempts `GET /v2/`). Persists to config.
 
@@ -120,7 +120,7 @@ Hits `Tags()`. Expected to work even when `search` doesn't.
 ### 6.1. Unit
 
 *   `Resolve()` with short names, fully qualified refs, refs with and without tag.
-*   `Catalog()` with a mock registry returning 200, 404, 401, 405 — each maps to the right outcome.
+*   `Catalog()` with a mock registry returning 200, 404, 401, 405, each maps to the right outcome.
 *   `Tags()` with pagination (the distribution spec allows `_link` headers).
 *   `Digest()` returns the right sha256 for a tag.
 *   Policy template expansion.
@@ -136,5 +136,5 @@ Hits `Tags()`. Expected to work even when `search` doesn't.
 ## 7. Open questions
 
 *   **Catalog pagination:** large registries paginate `_catalog`. We should follow all pages; need a sane cap so a misconfigured endpoint doesn't blow up.
-*   **Wildcard identity regexes in policy templates:** `--template github` without an `--identity-regex` defaults to… nothing? Refusing to add with only a template seems right — a template isn't a policy on its own without the regex.
+*   **Wildcard identity regexes in policy templates:** `--template github` without an `--identity-regex` defaults to… nothing? Refusing to add with only a template seems right, a template isn't a policy on its own without the regex.
 *   **Registry-level auth beyond Docker config:** some registries use OAuth device flow. Out of MVP; falls back to "configure your Docker credential helper."
