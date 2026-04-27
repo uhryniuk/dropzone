@@ -154,6 +154,7 @@ func (h *PackageHandler) InstallPackage(ctx context.Context, ref string, opts In
 
 	meta := localstore.PackageMetadata{
 		Name:              pkgName,
+		Image:             resolved.Image,
 		Tag:               resolved.Tag,
 		Digest:            info.Digest,
 		Registry:          resolved.Registry.Name,

@@ -3,7 +3,9 @@ package packagehandler
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/uhryniuk/dropzone/internal/localstore"
 	"github.com/uhryniuk/dropzone/internal/registry"
@@ -74,18 +76,37 @@ func (h *PackageHandler) checkOne(ctx context.Context, p localstore.PackageMetad
 	}
 	reg, err := h.registries.Get(p.Registry)
 	if err != nil {
-		u.UnreachableError = err
-		return u
+		// The package was installed via a hostname-qualified ref
+		// (e.g., gitea.example.com/owner/repo) against an ephemeral
+		// registry that was never persisted in config. Materialize it
+		// the same way registry.Manager.Resolve does on the install
+		// path so update can still reach the source registry.
+		if strings.ContainsAny(p.Registry, ".:") {
+			reg = &registry.Registry{Name: p.Registry, URL: p.Registry}
+		} else {
+			u.UnreachableError = err
+			return u
+		}
 	}
 
-	digest, err := h.registries.Client().Digest(ctx, reg, p.Name, p.Tag)
+	// imagePath is the full path within the registry, used for both
+	// digest lookup and tag listing. For metadata written by older
+	// dropzone versions Image will be empty; fall back to Name (the
+	// basename) so the lookup still works for short-name installs
+	// like `python`.
+	imagePath := p.Image
+	if imagePath == "" {
+		imagePath = p.Name
+	}
+
+	digest, err := h.registries.Client().Digest(ctx, reg, imagePath, p.Tag)
 	if err != nil {
 		u.UnreachableError = fmt.Errorf("digest lookup: %w", err)
 		return u
 	}
 	u.CurrentDigest = digest
 
-	tags, err := h.registries.Tags(ctx, p.Registry, p.Name, true)
+	tags, err := h.registries.Client().Tags(ctx, reg, imagePath)
 	if err != nil {
 		// Tag listing failure shouldn't poison digest-drift detection;
 		// record but keep going.
@@ -96,6 +117,14 @@ func (h *PackageHandler) checkOne(ctx context.Context, p localstore.PackageMetad
 	return u
 }
 
+// cosignSidecarTagPattern matches the tag scheme cosign uses for the
+// per-image signature, attestation, and SBOM artifacts that live on the
+// same repo as the image: sha256-<hex>[.ext] (.sig, .att, .sbom, etc.).
+// Real human-facing tags never follow this pattern, so a simple regex
+// suffices to filter all of them out of update output without false
+// positives.
+var cosignSidecarTagPattern = regexp.MustCompile(`^sha256-[0-9a-f]{64}(\.[a-z0-9]+)?$`)
+
 // newerTagsThan picks tags lexicographically greater than current. We
 // deliberately don't try to be clever about semver: most registries
 // (Chainguard included) ship a mix of date-stamped and semver tags, and
@@ -103,20 +132,33 @@ func (h *PackageHandler) checkOne(ctx context.Context, p localstore.PackageMetad
 // "greater than current string" heuristic surfaces obviously newer
 // versions without false negatives.
 //
-// Floating tags ("latest", "stable", "edge", etc.) are excluded -- they
-// don't describe a version, just a current pointer, so they're not
-// "newer" than anything.
+// Tags that don't describe a version are filtered:
+//
+//   - Floating tags (latest, stable, edge, main, master, dev): these
+//     are current-pointers, not versions.
+//   - Cosign sidecar tags (sha256-<hex>.sig|.att|.sbom etc.): these
+//     are signature, attestation, and SBOM artifacts that cosign
+//     pushes alongside the real image. Any signed image has hundreds.
+//   - The installed tag's `-suffix` variants (e.g., latest-dev when
+//     latest is installed): these are sibling builds, not successors.
 func newerTagsThan(current string, tags []string) []string {
 	floating := map[string]bool{
 		"latest": true, "stable": true, "edge": true, "main": true,
 		"master": true, "dev": true,
 	}
+	variantPrefix := current + "-"
 	var out []string
 	for _, t := range tags {
 		if floating[t] {
 			continue
 		}
 		if t == current {
+			continue
+		}
+		if cosignSidecarTagPattern.MatchString(t) {
+			continue
+		}
+		if strings.HasPrefix(t, variantPrefix) {
 			continue
 		}
 		if t > current {
@@ -140,7 +182,14 @@ func (h *PackageHandler) ApplyUpdate(ctx context.Context, name, targetTag string
 	if err != nil {
 		return nil, err
 	}
-	ref := existing.Registry + "/" + name
+	// Reconstruct the install ref from metadata. Image carries the
+	// full path within the registry; older metadata may not have it
+	// in which case Name (the basename) is the fallback.
+	imagePath := existing.Image
+	if imagePath == "" {
+		imagePath = name
+	}
+	ref := existing.Registry + "/" + imagePath
 	if targetTag != "" {
 		ref += ":" + targetTag
 	}

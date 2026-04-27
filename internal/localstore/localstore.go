@@ -38,16 +38,31 @@ import (
 // updates don't overwrite history and rollback can read a previous
 // digest's metadata if we ever retain multiple digest dirs per package.
 type PackageMetadata struct {
-	Name              string                `json:"name"`
-	Tag               string                `json:"tag"`
-	Digest            string                `json:"digest"`
-	Registry          string                `json:"registry"`
-	Entrypoint        []string              `json:"entrypoint"`
-	Platform          string                `json:"platform"`
-	InstalledAt       time.Time             `json:"installed_at"`
-	SignatureVerified bool                  `json:"signature_verified"`
-	Signer            string                `json:"signer,omitempty"`
-	Attestations      *cosign.Attestations  `json:"attestations,omitempty"`
+	// Name is the local package identifier (and the wrapper script
+	// filename under ~/.dropzone/bin). Derived from the basename of
+	// the installed image's path.
+	Name string `json:"name"`
+	// Image is the full image path within the source registry, with
+	// no leading slash. For an install of `dilly/crane` the Image is
+	// "dilly/crane" and Name is "crane". For short-name installs like
+	// `python`, Image and Name are the same. update flows query the
+	// registry against this path; wrappers use Name.
+	Image string `json:"image,omitempty"`
+	Tag   string `json:"tag"`
+	// Digest is the resolved digest at install time.
+	Digest string `json:"digest"`
+	// Registry is the configured-name or hostname-shaped registry
+	// identifier the install came from. Hostname-shaped values
+	// (containing a dot or colon) survive across runs even when no
+	// `dz add registry` ever happened, because update materializes
+	// an ephemeral registry from the same string.
+	Registry          string               `json:"registry"`
+	Entrypoint        []string             `json:"entrypoint"`
+	Platform          string               `json:"platform"`
+	InstalledAt       time.Time            `json:"installed_at"`
+	SignatureVerified bool                 `json:"signature_verified"`
+	Signer            string               `json:"signer,omitempty"`
+	Attestations      *cosign.Attestations `json:"attestations,omitempty"`
 }
 
 // ErrNotInstalled is returned by lookup methods for a package with no
