@@ -13,7 +13,7 @@ Dropzone is the consumer side of signed OCI images: it pulls the image, verifies
 3. Unpack the rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/` and write a wrapper script at `~/.dropzone/bin/<name>`.
 4. `dz update` queries the registry for digest drift on the installed tag (rebuilds of the same tag) and for newer tags.
 
-What dropzone gives you is a verified provenance trail: the binary at `~/.dropzone/bin/jq` came from this image, signed by this identity, attested to by this SBOM. What it does not do is judge image content. "Was this image built minimally?" or "Are there CVEs in here?" are questions for the publisher and the attached vulnerability-scan attestation, which dropzone surfaces but does not gate on.
+What dropzone gives you is a verified provenance trail: the binary at `~/.dropzone/bin/python` came from this image, signed by this identity, attested to by this SBOM. What it does not do is judge image content. "Was this image built minimally?" or "Are there CVEs in here?" are questions for the publisher and the attached vulnerability-scan attestation, which dropzone surfaces but does not gate on.
 
 ### The seeded starting point
 
@@ -23,8 +23,8 @@ This is a recommended starting point, not a fixed default. You can change `defau
 
 ## Features
 
-* `dz install <ref> [--allow-unsigned]` and `dz remove <name>` for the lifecycle.
-* `dz add registry`, `dz list registries`, `dz remove registry`, `dz search`, `dz tags` for managing sources.
+* `dz install <ref> [--allow-unsigned]` and `dz remove <name>` for the lifecycle. Refs can be short names (`python`), configured-registry-qualified (`chainguard/python:latest`), or fully-qualified URLs (`gitea.example.com/owner/repo:tag`); the URL form works without adding the registry first.
+* `dz add registry`, `dz list registries`, `dz remove registry`, `dz search`, `dz tags` for managing the sources you do want to add permanently.
 * `dz update [<name>] [--check] [--all] [--yes]` detects same-tag digest drift and newer tags, applies updates atomically.
 * `dz rollback <name>` flips the package back to its previous digest directory.
 * `dz doctor [--fix]` reports orphan wrappers, broken symlinks, packages without wrappers, and PATH issues.
@@ -32,6 +32,7 @@ This is a recommended starting point, not a fixed default. You can change `defau
 * `dz login` and `dz logout` for private registries. Docker credentials work too via the chained keychain.
 * `dz purge` wipes `~/.dropzone/` after confirmation.
 * `dz list --json` for scripting. `dz completion {bash|zsh|fish|powershell}` for shell completion.
+* `always_allow_unsigned: true` in `~/.dropzone/config/config.yaml` if you don't want to keep typing `--allow-unsigned` against registries that don't have a policy.
 
 ## Installation
 
@@ -65,9 +66,10 @@ On first run, dropzone creates `~/.dropzone/` and seeds the `chainguard` registr
 ### Install a package
 
 ```bash
-dz install jq                                 # short name, expanded against the default registry
-dz install chainguard/jq:1.7.1                # registry name + image + tag
-dz install mycorp/internal-tool --allow-unsigned   # registry without a configured policy
+dz install python                                       # short name, expanded against the default registry
+dz install chainguard/python:latest                     # registry name + image + tag
+dz install gitea.example.com/owner/repo --allow-unsigned   # hostname URL works without `dz add registry`
+dz install mycorp/internal-tool --allow-unsigned        # configured registry without a policy
 ```
 
 ### Manage registries
@@ -89,7 +91,7 @@ The `--template` flag pre-fills the OIDC issuer for `github`, `gitlab`, `google`
 ```bash
 dz search                          # list images in the default registry's catalog (when /v2/_catalog is exposed)
 dz search openssl --registry chainguard
-dz tags jq                         # list tags for an image
+dz tags python                     # list tags for an image
 ```
 
 Many registries (Docker Hub, GHCR) disable the catalog endpoint. In those cases `dz search` says so and `dz tags <image>` is the fallback.
@@ -101,11 +103,11 @@ dz list                  # installed packages
 dz list --json           # machine-readable
 
 dz update                # status across all installed packages
-dz update jq             # check + prompt for one
+dz update python         # check + prompt for one
 dz update --all --yes    # apply all available updates without prompting
 
-dz remove jq
-dz rollback jq           # flip back to the previous digest after a bad update
+dz remove python
+dz rollback python       # flip back to the previous digest after a bad update
 ```
 
 ### Authenticate to a private registry
