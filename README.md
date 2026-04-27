@@ -166,4 +166,4 @@ v0.1 is feature-complete. See `docs/roadmap.md` for the per-phase build history 
 
 ## License
 
-[MIT](LICENSE)
+[GNU General Public License v3.0](LICENSE)
