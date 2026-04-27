@@ -6,14 +6,16 @@
 
 For each install, dropzone selects the manifest-list entry matching the host OS and architecture (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`). Images that don't ship a matching platform entry are not installable, dropzone reports this clearly and does not attempt translation or VM-based execution. In practice this means Linux-only image catalogs (such as Chainguard's current offering) work on Linux hosts; macOS hosts need images that explicitly ship `darwin/*` platforms.
 
-Signed images are the default, and signature verification is gated by a per-registry policy. Unsigned images refuse to install unless the user explicitly opts in with `--allow-unsigned`. The default registry is `cgr.dev/chainguard`, pre-configured with the correct cosign keyless identity policy, so the out-of-the-box experience is "install hardened, continuously-rebuilt versions of common CLI tools with a cryptographic receipt."
+Signed images are the default, and signature verification is gated by a per-registry policy. Unsigned images refuse to install unless the user explicitly opts in with `--allow-unsigned`. The default registry is `cgr.dev/chainguard`, pre-configured with the correct cosign keyless identity policy. The out-of-the-box experience is to install CLI tools with a verified provenance trail: the binary came from a specific signing identity at a specific image digest, with whatever SBOM and SLSA provenance the publisher chose to attach.
+
+Dropzone stops at the signature. It does not make claims about whether the underlying image is minimal, CVE-patched, or hardened in any other content sense. Those are properties of how the image was built, attested by the publisher, and surfaced as install-time output for the user to read. Verifying the signature confirms who built it and which image digest they signed. Everything else flows from trusting that signing identity.
 
 ## 2. Goals
 
 *   **Use OCI registries as package registries.** Walk the `/v2/` distribution API directly for catalog, tags, and manifest operations. Behave like a registry client, not a `docker pull` wrapper.
 *   **Install binaries natively on the host.** Unpack the full image rootfs into a per-package directory, generate a wrapper script at `~/.dropzone/bin/<name>` that invokes the entrypoint from inside the bundled rootfs with library paths set appropriately. The user runs it like any other binary.
 *   **Verify provenance with cosign / Sigstore.** Every install performs keyless signature verification against a registry-specific policy. Fail closed unless the user opts in to an unsigned install.
-*   **Surface attestations on install.** Show signer identity, SBOM availability, SLSA provenance, and vulnerability-scan summary so users see *why* an install is trustworthy.
+*   **Surface attestations on install.** Show signer identity, SBOM availability, SLSA provenance, and vulnerability-scan summary at install time so users have everything they need to judge whether to trust the publisher.
 *   **Update against the live registry.** `dz update` hits `/v2/<name>/tags/list` and digest endpoints for installed packages, detects rebuilds of the same tag (CVE-patch rolls) as well as newer tags, and re-shims.
 *   **Simplicity.** No Dockerfile authoring, no custom package format, no GPG, no credential store of our own. Consume OCI images that already exist on registries we can reach.
 
@@ -190,7 +192,7 @@ registries:
       issuer: https://token.actions.githubusercontent.com
       identity_regex: https://github.com/chainguard-images/images/.*
   - name: mycorp
-    url: registry.mycorp.example/hardened
+    url: registry.mycorp.example/signed
     cosign_policy:
       issuer: https://accounts.google.com
       identity_regex: .*@mycorp.example
@@ -246,7 +248,7 @@ This is the feature that makes the registry feel like a real registry, installed
 
 ## 8. Security model
 
-Trust flows from a registry's cosign policy. Verification is keyless / Sigstore-based. A verified signature says: "an identity matching the registry's configured policy signed this specific image digest." For the Chainguard default, that identity is the `chainguard-images/images` repository's GitHub Actions runner, so a verified signature is evidence the image came out of Chainguard's hardened build pipeline.
+Trust flows from a registry's cosign policy. Verification is keyless / Sigstore-based. A verified signature says: "an identity matching the registry's configured policy signed this specific image digest." For the Chainguard default, that identity is the `chainguard-images/images` repository's GitHub Actions runner, so a verified signature is evidence the image came out of Chainguard's build pipeline. Whether that pipeline produced an image with any particular property (minimal, CVE-patched, reproducible) is not something dropzone evaluates; it's something the user infers by trusting that signing identity.
 
 Attestations layered on top of signatures, SBOM, SLSA provenance, vulnerability scan, are surfaced to the user but not themselves gating. The gating decision is "is this signature valid under the registry's policy?"
 
@@ -262,7 +264,7 @@ Known non-coverage, called out explicitly so we don't pretend otherwise:
 
 The shipped feature set covers v0.1 end to end. Items that are deferred (with rationale) live in `BACKBURNER.md`. The headline ones:
 
-*   **`dz publish`**: a build, sign, and push flow for users who want to ship their own hardened images through dropzone.
+*   **`dz publish`**: a build, sign, and push flow for users who want to ship their own signed images through dropzone.
 *   **Multiple binaries per image**: honor `CMD` or additional image labels to expose more than one binary per image.
 *   **Attestation-based install policies**: a way to refuse images with open critical CVEs per the attached vuln scan, and similar gating rules. Requires a small policy language.
 *   **Per-attestation cryptographic verification**: today we surface the in-toto statement contents but trust derives from the image-level signature; verifying each DSSE envelope independently is a future enhancement.

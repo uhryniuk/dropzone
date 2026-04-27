@@ -44,7 +44,7 @@ func TestSaveLoadRoundTripPreservesRegistries(t *testing.T) {
 	cfg, _ := DefaultConfig()
 	cfg.UpsertRegistry(RegistryConfig{
 		Name: "mycorp",
-		URL:  "registry.mycorp.example/hardened",
+		URL:  "registry.mycorp.example/signed",
 		CosignPolicy: &CosignPolicy{
 			Issuer:        "https://accounts.google.com",
 			IdentityRegex: ".*@mycorp.example",

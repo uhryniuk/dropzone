@@ -46,7 +46,7 @@ func TestResolveExplicitTag(t *testing.T) {
 }
 
 func TestResolveQualifiedByRegistryName(t *testing.T) {
-	m := seedManager(t, config.RegistryConfig{Name: "mycorp", URL: "registry.mycorp.example/hardened"})
+	m := seedManager(t, config.RegistryConfig{Name: "mycorp", URL: "registry.mycorp.example/signed"})
 	ref, err := m.Resolve("mycorp/tool:dev")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

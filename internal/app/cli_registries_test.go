@@ -29,7 +29,7 @@ func runCmdInHome(t *testing.T, args ...string) (string, string, error) {
 
 func TestAddRegistryWritesConfig(t *testing.T) {
 	out, home, err := runCmdInHome(t,
-		"add", "registry", "mycorp", "registry.mycorp.example/hardened",
+		"add", "registry", "mycorp", "registry.mycorp.example/signed",
 		"--template", "github",
 		"--identity-regex", "https://github.com/mycorp/.*",
 	)

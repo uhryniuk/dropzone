@@ -1,19 +1,21 @@
 # Dropzone
 
-Dropzone is a CLI that installs binaries from signed OCI container images directly onto your Linux or macOS host. It treats container registries as package registries: add a registry, browse it, install the entrypoint binary, and keep it up to date with CVE-patched rebuilds. Provenance is verified through Sigstore.
+Dropzone is a CLI that installs binaries from signed OCI container images directly onto your Linux or macOS host. It treats container registries as package registries: add a registry, browse it, install the entrypoint binary, and keep it up to date as the source registry rebuilds the same tag. Every install verifies a cosign signature against a per-registry identity policy, so you have a cryptographic record of who built the binary you're running.
 
 No container runtime is required at use time. The extracted binary runs natively against its bundled libraries.
 
 ## Concept
 
-Hardened container images already exist. Dropzone uses them as the source of truth for binaries on your host.
+Dropzone is the consumer side of signed OCI images: it pulls the image, verifies the signature against a registry-scoped identity policy, and runs the entrypoint binary natively on your host.
 
 1. Pull a signed OCI image from any registry. The default is `cgr.dev/chainguard`.
-2. Verify the image signature with cosign against a per-registry identity policy.
+2. Verify the image signature with cosign against a per-registry identity policy. Fail closed unless `--allow-unsigned` is passed and the registry has no policy.
 3. Unpack the rootfs into `~/.dropzone/packages/<name>/<digest>/rootfs/` and write a wrapper script at `~/.dropzone/bin/<name>`.
-4. `dz update` queries the registry for digest drift on the installed tag (CVE-patch rebuilds) and for newer tags.
+4. `dz update` queries the registry for digest drift on the installed tag (rebuilds of the same tag) and for newer tags.
 
-`dz install jq` gives you a Chainguard-built `jq` with a verified signing identity and an SBOM summary. Any OCI registry is supported; unsigned images require `--allow-unsigned`.
+What dropzone gives you is a verified provenance trail: the binary at `~/.dropzone/bin/jq` came from this image, signed by this identity, attested to by this SBOM. What it does not do is judge image content. "Was this image built minimally?" or "Are there CVEs in here?" are questions for the publisher and the attached vulnerability-scan attestation, which dropzone surfaces but does not gate on.
+
+`dz install jq` against the default Chainguard registry verifies Chainguard's GitHub Actions signing identity and prints the SBOM and provenance summary. Any OCI registry works; unsigned images need `--allow-unsigned`.
 
 ## Features
 
@@ -69,7 +71,7 @@ dz install mycorp/internal-tool --allow-unsigned   # registry without a configur
 ```bash
 dz list registries
 
-dz add registry mycorp registry.mycorp.example/hardened \
+dz add registry mycorp registry.mycorp.example/signed \
   --template github \
   --identity-regex 'https://github.com/mycorp/.*'
 

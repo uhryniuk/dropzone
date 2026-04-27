@@ -32,7 +32,7 @@ Grouped by theme. Each entry ends with the file that triggered the decision so f
 
 ## Scope expansions
 
-- **`dz publish`.** Build + sign + push a hardened image through dropzone. Closes the producer-side loop for users who want their own private catalogs. Biggest feature on this list. See `DESIGN.md` §9.
+- **`dz publish`.** Build + sign + push a signed image through dropzone. Closes the producer-side loop for users who want their own private catalogs. Biggest feature on this list. See `DESIGN.md` §9.
 - **Multiple binaries per image.** Honor `CMD` or image-level labels to expose more than just `ENTRYPOINT[0]`. Complicates naming and the wrapper layout. See `DESIGN.md` §9.
 - **Dependency resolution between packages.** Real package-manager territory; requires a manifest format and a solver. See `DESIGN.md` §9.
 - **Windows host support.** Non-trivial: no POSIX wrapper scripts, different binary formats, different PATH conventions. See `DESIGN.md` §3 (non-goals) and §9.

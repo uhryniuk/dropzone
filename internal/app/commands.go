@@ -664,7 +664,7 @@ Templates:
   google      Issuer pinned to Google OIDC; supply --identity-regex
 
 Examples:
-  dz add registry mycorp registry.mycorp.example/hardened \\
+  dz add registry mycorp registry.mycorp.example/signed \\
       --template github --identity-regex 'https://github.com/mycorp/.*'
   dz add registry hub-mirror docker.io --default`,
 		Args: cobra.ExactArgs(2),
