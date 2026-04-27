@@ -132,7 +132,13 @@ func (h *PackageHandler) InstallPackage(ctx context.Context, ref string, opts In
 	}
 
 	util.LogInfo("Unpacking to package directory...")
+	// Package name is the basename of the image path, not the full path.
+	// Otherwise an install of "dilly/crane" would try to write
+	// ~/.dropzone/bin/dilly/crane which has a directory in it.
 	pkgName := resolved.Image
+	if i := strings.LastIndex(pkgName, "/"); i >= 0 {
+		pkgName = pkgName[i+1:]
+	}
 	result, err := shim.Build(shim.BuildInput{
 		Name:            pkgName,
 		Digest:          info.Digest,

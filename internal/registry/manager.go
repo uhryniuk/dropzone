@@ -93,13 +93,25 @@ func (m *Manager) Remove(name string) error {
 //
 // Accepted forms:
 //
-//	jq                          → default registry, image "jq", tag "latest"
-//	jq:1.7.1                    → default registry, image "jq", tag "1.7.1"
-//	chainguard/jq               → registry "chainguard", image "jq"
-//	chainguard/jq:1.7.1         → registry "chainguard", image "jq", tag "1.7.1"
-//	chainguard/private/tool:dev → registry "chainguard", image "private/tool"
+//	jq                                         → default registry, image "jq", tag "latest"
+//	jq:1.7.1                                   → default registry, image "jq", tag "1.7.1"
+//	chainguard/jq                              → registry "chainguard", image "jq"
+//	chainguard/jq:1.7.1                        → registry "chainguard", image "jq", tag "1.7.1"
+//	chainguard/private/tool:dev                → registry "chainguard", image "private/tool"
+//	gitea.example.com/owner/repo:tag           → ephemeral registry "gitea.example.com",
+//	                                             image "owner/repo", tag "tag"
+//	localhost:5000/foo:latest                  → ephemeral registry "localhost:5000",
+//	                                             image "foo", tag "latest"
 //
-// Unknown registry names → ErrRegistryNotFound. Empty ref → ErrEmptyRef.
+// The first segment is interpreted as a configured registry name when it
+// has neither a dot nor a colon (e.g., "chainguard"). Otherwise it's
+// treated as a hostname-shaped ephemeral registry URL: the install can
+// proceed without `dz add registry` first, but because no cosign policy
+// is attached, the install requires `--allow-unsigned` (or the
+// always_allow_unsigned config option).
+//
+// Unknown configured-name first segments → ErrRegistryNotFound.
+// Empty ref → ErrEmptyRef.
 func (m *Manager) Resolve(ref string) (*ResolvedRef, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -117,16 +129,27 @@ func (m *Manager) Resolve(ref string) (*ResolvedRef, error) {
 		return &ResolvedRef{Registry: def, Image: image, Tag: tag}, nil
 	}
 
-	// Long form: first path segment is the registry name.
 	firstSlash := strings.Index(image, "/")
-	regName := image[:firstSlash]
-	imagePath := image[firstSlash+1:]
+	head := image[:firstSlash]
+	rest := image[firstSlash+1:]
 
-	reg, err := m.Get(regName)
+	// Hostname-shaped first segment (contains a dot or a colon) means
+	// the user gave us a fully-qualified URL. Materialize an ephemeral
+	// Registry rather than requiring a prior `dz add registry`.
+	if strings.ContainsAny(head, ".:") {
+		return &ResolvedRef{
+			Registry: &Registry{Name: head, URL: head},
+			Image:    rest,
+			Tag:      tag,
+		}, nil
+	}
+
+	// Plain first segment: configured registry name lookup.
+	reg, err := m.Get(head)
 	if err != nil {
 		return nil, err
 	}
-	return &ResolvedRef{Registry: reg, Image: imagePath, Tag: tag}, nil
+	return &ResolvedRef{Registry: reg, Image: rest, Tag: tag}, nil
 }
 
 // Catalog fetches repositories from the registry, caching the result.
