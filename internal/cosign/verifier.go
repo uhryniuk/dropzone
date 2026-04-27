@@ -1,6 +1,7 @@
 package cosign
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,27 +33,28 @@ func NewVerifier() *Verifier {
 	return &Verifier{}
 }
 
-// Result captures the verified identity for display + storage in the
+// Result captures the verified identity for display and storage in the
 // installed package's metadata.json. Empty when Verify failed.
 type Result struct {
-	// Signer is the certificate's SAN (the signing identity, e.g.
+	// Signer is the certificate's SAN (the signing identity, e.g.,
 	// "https://github.com/chainguard-images/images/.github/workflows/...@refs/...").
 	Signer string
 	// Issuer is the OIDC issuer that minted the signing identity.
 	Issuer string
 }
 
-// Verify checks bundleJSON against policy. Returns a Result on success.
+// Verify checks a Sigstore protobuf bundle JSON against policy.
+// Returns a Result on success.
 //
-//   - bundleJSON is the raw JSON of a Sigstore protobuf bundle, fetched
-//     by registry.Bundle from either the OCI 1.1 referrers API or the
-//     legacy sidecar tag.
-//   - imageDigest is the resolved image digest (e.g. "sha256:abc..."),
-//     used as the artifact digest for verification.
-//   - policy must be Validate()-able and pre-populated.
+//   - bundleJSON: raw JSON of a Sigstore protobuf bundle.
+//   - imageDigest: resolved image digest (e.g. "sha256:abc..."), used
+//     as the artifact digest for verification.
+//   - policy: must be Validate()-able and pre-populated.
+//
+// For cosign legacy signatures (the format Chainguard ships today),
+// callers should use VerifyLegacy instead. The legacy path constructs
+// a protobundle from the four annotations and runs sigstore-go on it.
 func (v *Verifier) Verify(bundleJSON []byte, imageDigest string, policy Policy) (*Result, error) {
-	// Validate inputs before doing any expensive setup (TUF root fetch).
-	// Bad calls fail fast and don't pay the network cost.
 	if err := policy.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid policy: %w", err)
 	}
@@ -64,7 +66,6 @@ func (v *Verifier) Verify(bundleJSON []byte, imageDigest string, policy Policy) 
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
 		return nil, fmt.Errorf("parse bundle: %w", err)
 	}
-
 	if err := v.ensureLoaded(); err != nil {
 		return nil, err
 	}
@@ -73,7 +74,6 @@ func (v *Verifier) Verify(bundleJSON []byte, imageDigest string, policy Policy) 
 	if err != nil {
 		return nil, fmt.Errorf("build certificate identity: %w", err)
 	}
-
 	pb := verify.NewPolicy(
 		verify.WithArtifactDigest("sha256", digestBytes),
 		verify.WithCertificateIdentity(identity),
@@ -83,13 +83,60 @@ func (v *Verifier) Verify(bundleJSON []byte, imageDigest string, policy Policy) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrSignatureInvalid, err)
 	}
+	return signerFromResult(res), nil
+}
 
+// VerifyLegacy verifies a cosign legacy signature (annotation-based
+// sidecar with `SignedEntryTimestamp` in the bundle annotation).
+//
+// The image-digest binding (the simple-signing payload's
+// `critical.image.docker-manifest-digest`) is checked inside
+// buildLegacyBundle before sigstore-go even sees the bundle. The
+// signature itself is then verified by sigstore-go via WithArtifact,
+// which hashes the supplied payload bytes and confirms they match the
+// MessageDigest the bundle carries.
+func (v *Verifier) VerifyLegacy(parts LegacyParts, imageDigest string, policy Policy) (*Result, error) {
+	if err := policy.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid policy: %w", err)
+	}
+
+	pb, payload, err := buildLegacyBundle(parts, imageDigest)
+	if err != nil {
+		return nil, err
+	}
+	b, err := bundle.NewBundle(pb)
+	if err != nil {
+		return nil, fmt.Errorf("wrap legacy bundle: %w", err)
+	}
+	if err := v.ensureLoaded(); err != nil {
+		return nil, err
+	}
+
+	identity, err := verify.NewShortCertificateIdentity(policy.Issuer, "", "", policy.IdentityRegex)
+	if err != nil {
+		return nil, fmt.Errorf("build certificate identity: %w", err)
+	}
+	policyBuilder := verify.NewPolicy(
+		verify.WithArtifact(bytes.NewReader(payload)),
+		verify.WithCertificateIdentity(identity),
+	)
+
+	res, err := v.verifier.Verify(b, policyBuilder)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrSignatureInvalid, err)
+	}
+	return signerFromResult(res), nil
+}
+
+// signerFromResult turns sigstore-go's verification result into our
+// trimmed Result. Used by both Verify and VerifyLegacy.
+func signerFromResult(res *verify.VerificationResult) *Result {
 	out := &Result{}
-	if res.Signature != nil && res.Signature.Certificate != nil {
+	if res != nil && res.Signature != nil && res.Signature.Certificate != nil {
 		out.Signer = res.Signature.Certificate.SubjectAlternativeName
 		out.Issuer = res.Signature.Certificate.Issuer
 	}
-	return out, nil
+	return out
 }
 
 // ensureLoaded sets up the Sigstore public-good trusted root once per

@@ -64,8 +64,13 @@ func TestFetchBundleViaSidecarTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchBundle: %v", err)
 	}
-	if string(got) != wantBundle {
-		t.Errorf("bundle: got %q, want %q", got, wantBundle)
+	// The fixture is a v0.3 protobuf bundle JSON (no SignedEntryTimestamp),
+	// so FetchBundle should return it as Modern.
+	if string(got.Modern) != wantBundle {
+		t.Errorf("bundle: got %q, want %q", got.Modern, wantBundle)
+	}
+	if got.Legacy != nil {
+		t.Errorf("expected Legacy to be nil for a v0.3 bundle")
 	}
 }
 

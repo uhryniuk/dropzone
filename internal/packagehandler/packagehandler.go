@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/uhryniuk/dropzone/internal/cosign"
@@ -110,7 +111,7 @@ func (h *PackageHandler) InstallPackage(ctx context.Context, ref string, opts In
 	util.LogInfo("Pulling image...")
 	info, err := h.registries.Pull(ctx, resolved, staging)
 	if err != nil {
-		return nil, fmt.Errorf("pull: %w", err)
+		return nil, fmt.Errorf("pull: %w", annotatePullError(err, resolved.Registry.URL))
 	}
 
 	// Verification: hard gate before any persistent state changes.
@@ -233,7 +234,24 @@ func (h *PackageHandler) verifyImage(ctx context.Context, ref *registry.Resolved
 		Issuer:        policy.Issuer,
 		IdentityRegex: policy.IdentityRegex,
 	}
-	res, err := h.verifier.Verify(bundleJSON, digest, cp)
+	var res *cosign.Result
+	switch {
+	case bundleJSON.Legacy != nil:
+		// Cosign legacy signature: Rekor inclusion proof in the bundle
+		// annotation, signature/cert in sibling annotations, payload in
+		// the layer blob. Convert into a Sigstore protobuf bundle and
+		// verify through the same code path.
+		res, err = h.verifier.VerifyLegacy(cosign.LegacyParts{
+			Bundle:         bundleJSON.Legacy.Bundle,
+			SignatureB64:   bundleJSON.Legacy.SignatureB64,
+			CertificatePEM: bundleJSON.Legacy.CertificatePEM,
+			Payload:        bundleJSON.Legacy.Payload,
+		}, digest, cp)
+	case len(bundleJSON.Modern) > 0:
+		res, err = h.verifier.Verify(bundleJSON.Modern, digest, cp)
+	default:
+		return verifyOutcome{}, fmt.Errorf("bundle fetch returned no payload")
+	}
 	if err != nil {
 		// Do not fall through to --allow-unsigned. A policy that fails
 		// is the strongest possible "do not install" signal.
@@ -284,4 +302,29 @@ func digestDirFromResult(digest string) string {
 		out = append(out, c)
 	}
 	return string(out)
+}
+
+// annotatePullError adds a Chainguard-specific hint when the registry
+// returns a FORBIDDEN. The free Chainguard catalog requires authentication
+// (chainctl login + configure-docker writes credentials Docker's keychain
+// reads); without it, anonymous token requests against cgr.dev return
+// 403 with no clue about why.
+func annotatePullError(err error, registryURL string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if !strings.Contains(strings.ToLower(msg), "forbidden") {
+		return err
+	}
+	if !strings.Contains(registryURL, "cgr.dev") {
+		return err
+	}
+	return fmt.Errorf(
+		"%w\n\n"+
+			"Chainguard's catalog requires a free login. If you have chainctl installed:\n"+
+			"    chainctl auth login\n"+
+			"    chainctl auth configure-docker\n"+
+			"Then re-run dz install. Sessions are short-lived; if you've authenticated before, run those two commands again to refresh.",
+		err)
 }
