@@ -48,6 +48,16 @@ type Config struct {
 	DefaultRegistry string           `yaml:"default_registry"`
 	Registries      []RegistryConfig `yaml:"registries"`
 
+	// AlwaysAllowUnsigned, when true, behaves as if every `dz install`
+	// invocation passed `--allow-unsigned`. Lets users opt out of the
+	// per-install flag when they're knowingly running against
+	// unsigned-by-design registries (a local registry:2, an internal
+	// mirror that hasn't been signed yet, a personal Docker Hub
+	// account). Off by default. Setting this does not bypass
+	// verification failures on registries that DO have a policy; failed
+	// verification of a policy-signed image is still a hard stop.
+	AlwaysAllowUnsigned bool `yaml:"always_allow_unsigned,omitempty"`
+
 	mu sync.RWMutex
 }
 

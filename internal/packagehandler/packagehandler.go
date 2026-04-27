@@ -204,7 +204,8 @@ func (h *PackageHandler) verifyImage(ctx context.Context, ref *registry.Resolved
 		if !opts.AllowUnsigned {
 			return verifyOutcome{}, fmt.Errorf(
 				"registry %q has no cosign policy configured. "+
-					"Add one in ~/.dropzone/config/config.yaml or pass --allow-unsigned to install without verification",
+					"Add one in ~/.dropzone/config/config.yaml, pass --allow-unsigned for one install, "+
+					"or set always_allow_unsigned: true in the config to stop being prompted",
 				ref.Registry.Name)
 		}
 		util.LogInfo("Skipping signature verification (registry has no policy, --allow-unsigned)")

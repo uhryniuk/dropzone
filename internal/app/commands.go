@@ -219,8 +219,12 @@ func (a *App) newInstallCommand() *cobra.Command {
 		Short: "Install a package from an OCI registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Config-level always_allow_unsigned promotes to per-install
+			// allow-unsigned automatically. The flag still wins where
+			// set, but users who never want the prompt can flip the
+			// config option once and stop typing the flag.
 			result, err := a.PackageHandler.InstallPackage(cmd.Context(), args[0], packagehandler.InstallOptions{
-				AllowUnsigned: allowUnsigned,
+				AllowUnsigned: allowUnsigned || a.Config.AlwaysAllowUnsigned,
 			})
 			if err != nil {
 				return err
@@ -474,7 +478,7 @@ table. With a name, scans just that package and prompts to apply.
 				return nil
 			}
 
-			opts := packagehandler.InstallOptions{AllowUnsigned: allowUnsigned}
+			opts := packagehandler.InstallOptions{AllowUnsigned: allowUnsigned || a.Config.AlwaysAllowUnsigned}
 			for _, u := range applicable {
 				targetTag := u.InstalledTag
 				if u.SameTagRebuild() {

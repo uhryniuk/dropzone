@@ -103,6 +103,31 @@ func TestLoadMalformedYAMLFails(t *testing.T) {
 	}
 }
 
+func TestAlwaysAllowUnsignedRoundTrip(t *testing.T) {
+	// always_allow_unsigned defaults to false (the safe default), and
+	// round-trips through save/load when set. The CLI consults this
+	// flag to decide whether to skip verification on registries with
+	// no cosign policy without requiring --allow-unsigned every time.
+	cfg, _ := DefaultConfig()
+	if cfg.AlwaysAllowUnsigned {
+		t.Error("default should be AlwaysAllowUnsigned=false")
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.yaml")
+	cfg.AlwaysAllowUnsigned = true
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.AlwaysAllowUnsigned {
+		t.Error("AlwaysAllowUnsigned did not survive round-trip")
+	}
+}
+
 func TestLoadFillsMissingDefaultRegistryFromFirstEntry(t *testing.T) {
 	// Simulates an older/hand-edited config without default_registry.
 	tmpDir := t.TempDir()
