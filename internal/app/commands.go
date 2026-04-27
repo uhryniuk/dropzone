@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/uhryniuk/dropzone/internal/cosign"
 	"github.com/uhryniuk/dropzone/internal/hostintegration"
+	"github.com/uhryniuk/dropzone/internal/localstore"
 	"github.com/uhryniuk/dropzone/internal/packagehandler"
 	"github.com/uhryniuk/dropzone/internal/registry"
 	"golang.org/x/term"
@@ -291,14 +292,16 @@ func (a *App) newListCommand() *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tTAG\tDIGEST\tREGISTRY\tSIGNED\tINSTALLED")
+			fmt.Fprintln(w, "NAME\tTAG\tDIGEST\tSOURCE\tSIGNED\tINSTALLED")
 			for _, p := range pkgs {
 				signed := "no"
 				if p.SignatureVerified {
 					signed = "yes"
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					p.Name, p.Tag, shortDigest(p.Digest), p.Registry, signed, p.InstalledAt.Format("2006-01-02 15:04"))
+					p.Name, p.Tag, shortDigest(p.Digest),
+					a.packageSource(p), signed,
+					p.InstalledAt.Format("2006-01-02 15:04"))
 			}
 			return w.Flush()
 		},
@@ -596,44 +599,127 @@ for a known image instead.`,
 
 func (a *App) newTagsCommand() *cobra.Command {
 	var registryName string
+	var showAll bool
 	cmd := &cobra.Command{
-		Use:   "tags <image> [--registry <name>]",
+		Use:   "tags <name-or-ref> [--registry <name>]",
 		Short: "List available tags for an image",
-		Args:  cobra.ExactArgs(1),
+		Long: `List tags for an image. The argument can be:
+
+  jq                         short name; resolved against the default registry
+  chainguard/jq              configured-registry-qualified
+  gitea.example.com/owner/x  hostname-qualified (works without dz add registry)
+
+Or, if it matches the name of a package you've already installed,
+dropzone uses that package's source registry and image path. So
+running 'dz tags crane' after 'dz install gitea.example.com/dilly/crane'
+queries gitea.example.com for dilly/crane tags, not the default
+registry.
+
+Cosign sidecar tags (signature, attestation, and SBOM artifacts that
+look like sha256-<hex>.sig) are hidden by default since you can't
+install them. Pass --all to see them too.
+
+Pass --registry to override the argument-derived registry choice.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			image := args[0]
-			// Allow either a short image name (resolved against the
-			// chosen/default registry) or a "<registry>/<image>" form.
-			// We don't need full Resolve semantics here; tags don't take
-			// a tag suffix.
-			if registryName == "" {
-				if i := strings.Index(image, "/"); i > 0 {
-					if _, err := a.RegistryManager.Get(image[:i]); err == nil {
-						registryName = image[:i]
-						image = image[i+1:]
-					}
-				}
-				if registryName == "" {
-					registryName = a.Config.DefaultRegistry
-				}
-			}
-			tags, err := a.RegistryManager.Tags(cmd.Context(), registryName, image, false)
+			arg := args[0]
+			reg, image, err := a.resolveTagsTarget(arg, registryName)
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			if len(tags) == 0 {
-				fmt.Fprintf(out, "No tags for %s in registry %q.\n", image, registryName)
-				return nil
+
+			tags, err := a.RegistryManager.Client().Tags(cmd.Context(), reg, image)
+			if err != nil {
+				return err
 			}
+
+			out := cmd.OutOrStdout()
+			shown := 0
 			for _, t := range tags {
+				if !showAll && packagehandler.IsCosignSidecarTag(t) {
+					continue
+				}
 				fmt.Fprintln(out, t)
+				shown++
+			}
+			if shown == 0 {
+				fmt.Fprintf(out, "No installable tags for %s/%s.\n", reg.URL, image)
+				if !showAll && len(tags) > 0 {
+					fmt.Fprintf(out, "(%d cosign sidecar tags hidden; pass --all to see them.)\n", len(tags))
+				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&registryName, "registry", "", "Registry to query (default: configured default_registry, or registry inferred from image prefix)")
+	cmd.Flags().StringVar(&registryName, "registry", "", "Configured registry name to query, overrides argument-derived resolution")
+	cmd.Flags().BoolVar(&showAll, "all", false, "Include cosign sidecar tags (signatures, attestations, SBOMs)")
 	return cmd
+}
+
+// resolveTagsTarget figures out which (registry, image-path) pair the
+// user means when they type `dz tags <arg>`. Order of precedence:
+//
+//  1. --registry flag plus the bare argument as the image path.
+//  2. The argument matches an installed package's Name. Use that
+//     package's registry and full image path.
+//  3. The argument is itself a fully-qualified ref (short name,
+//     configured-registry-qualified, or hostname-qualified). Hand it
+//     to Manager.Resolve which understands all three.
+//
+// Step 2 is the "I just installed crane from a private registry, now I
+// want to see what versions exist" case. Without it, dz tags crane
+// would query the default registry which probably has no crane.
+func (a *App) resolveTagsTarget(arg, registryFlag string) (*registry.Registry, string, error) {
+	if registryFlag != "" {
+		reg, err := a.RegistryManager.Get(registryFlag)
+		if err != nil {
+			return nil, "", err
+		}
+		return reg, arg, nil
+	}
+
+	// Step 2: did the user type a name that matches something they've
+	// installed? Use the metadata to query the right registry.
+	if installed, err := a.PackageHandler.ListInstalled(); err == nil {
+		for _, p := range installed {
+			if p.Name != arg {
+				continue
+			}
+			reg, err := a.registryFromMetadata(p.Registry)
+			if err != nil {
+				return nil, "", err
+			}
+			image := p.Image
+			if image == "" {
+				image = p.Name
+			}
+			return reg, image, nil
+		}
+	}
+
+	// Step 3: parse the arg as a ref. Resolve handles short names
+	// (default registry), configured-registry-qualified names, and
+	// hostname-qualified URLs.
+	resolved, err := a.RegistryManager.Resolve(arg)
+	if err != nil {
+		return nil, "", err
+	}
+	return resolved.Registry, resolved.Image, nil
+}
+
+// registryFromMetadata returns a Registry struct for a name stored in
+// PackageMetadata.Registry. For configured registries, it looks up the
+// real entry (with cosign policy, custom URL, etc.). For
+// hostname-shaped names (the ephemeral case from a hostname-qualified
+// install), it materializes a minimal Registry the same way Resolve and
+// the update flow do.
+func (a *App) registryFromMetadata(name string) (*registry.Registry, error) {
+	if reg, err := a.RegistryManager.Get(name); err == nil {
+		return reg, nil
+	} else if !strings.ContainsAny(name, ".:") {
+		return nil, err
+	}
+	return &registry.Registry{Name: name, URL: name}, nil
 }
 
 func (a *App) newAddCommand() *cobra.Command {
@@ -935,6 +1021,25 @@ func runLogin(a *App, cmd *cobra.Command, registryURL, username, password string
 	fmt.Fprintf(out, "Saved credentials for %s (user %s)\n", registryURL, username)
 	fmt.Fprintln(out, "Note: credentials are saved but not verified. They will be used on the next install or pull from this registry.")
 	return nil
+}
+
+// packageSource renders the full installed-from path for display:
+// registry URL joined with the image path. We use the registry's URL
+// (e.g., "docker.io/chainguard") rather than its short name
+// ("chainguard") so users see exactly where the bits came from.
+// Hostname-shaped registries (the ephemeral case) have name == URL,
+// so the lookup is a no-op for them. Older metadata without an Image
+// field falls back to the package name.
+func (a *App) packageSource(p localstore.PackageMetadata) string {
+	host := p.Registry
+	if reg, err := a.RegistryManager.Get(p.Registry); err == nil && reg.URL != "" {
+		host = reg.URL
+	}
+	image := p.Image
+	if image == "" {
+		image = p.Name
+	}
+	return host + "/" + image
 }
 
 // shortDigest truncates an OCI digest to "sha256:12chars" for display.

@@ -125,6 +125,14 @@ func (h *PackageHandler) checkOne(ctx context.Context, p localstore.PackageMetad
 // positives.
 var cosignSidecarTagPattern = regexp.MustCompile(`^sha256-[0-9a-f]{64}(\.[a-z0-9]+)?$`)
 
+// IsCosignSidecarTag reports whether tag is a cosign sidecar tag (a
+// signature, attestation, or SBOM artifact pushed alongside an image).
+// Exported so commands like `dz tags` can apply the same noise filter
+// as `dz update` without duplicating the regex.
+func IsCosignSidecarTag(tag string) bool {
+	return cosignSidecarTagPattern.MatchString(tag)
+}
+
 // newerTagsThan picks tags lexicographically greater than current. We
 // deliberately don't try to be clever about semver: most registries
 // (Chainguard included) ship a mix of date-stamped and semver tags, and
