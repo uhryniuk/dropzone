@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/uhryniuk/dropzone/internal/config"
+	"github.com/uhryniuk/dropzone/internal/cosign"
 	"github.com/uhryniuk/dropzone/internal/hostintegration"
 	"github.com/uhryniuk/dropzone/internal/localstore"
 	"github.com/uhryniuk/dropzone/internal/packagehandler"
@@ -26,6 +27,7 @@ type App struct {
 	HostIntegrator  *hostintegration.HostIntegrator
 	RegistryManager *registry.Manager
 	AuthStore       *registry.AuthStore
+	CosignVerifier  *cosign.Verifier
 	PackageHandler  *packagehandler.PackageHandler
 }
 
@@ -80,8 +82,9 @@ func (a *App) Initialize() error {
 		registry.NewCache(cacheDir, registry.DefaultCacheTTL),
 	)
 	a.AuthStore = registry.NewAuthStore(authPath)
+	a.CosignVerifier = cosign.NewVerifier()
 
-	a.PackageHandler = packagehandler.New(a.LocalStore, a.HostIntegrator, a.RegistryManager)
+	a.PackageHandler = packagehandler.New(a.LocalStore, a.HostIntegrator, a.RegistryManager, a.CosignVerifier)
 
 	return nil
 }

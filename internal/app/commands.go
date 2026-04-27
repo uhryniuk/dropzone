@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/uhryniuk/dropzone/internal/hostintegration"
+	"github.com/uhryniuk/dropzone/internal/packagehandler"
 	"golang.org/x/term"
 )
 
@@ -62,12 +63,15 @@ func (a *App) newVersionCommand() *cobra.Command {
 }
 
 func (a *App) newInstallCommand() *cobra.Command {
-	return &cobra.Command{
+	var allowUnsigned bool
+	cmd := &cobra.Command{
 		Use:   "install <ref>",
 		Short: "Install a package from an OCI registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := a.PackageHandler.InstallPackage(cmd.Context(), args[0])
+			result, err := a.PackageHandler.InstallPackage(cmd.Context(), args[0], packagehandler.InstallOptions{
+				AllowUnsigned: allowUnsigned,
+			})
 			if err != nil {
 				return err
 			}
@@ -76,12 +80,22 @@ func (a *App) newInstallCommand() *cobra.Command {
 			fmt.Fprintf(out, "  Registry: %s\n", result.Registry)
 			fmt.Fprintf(out, "  Platform: %s\n", result.Platform)
 			fmt.Fprintf(out, "  Binary:   %s\n", result.BinaryPath)
+			if result.SignatureVerified {
+				fmt.Fprintf(out, "  Signed by: %s\n", result.Signer)
+				if result.Issuer != "" {
+					fmt.Fprintf(out, "  Issuer:    %s\n", result.Issuer)
+				}
+			} else {
+				fmt.Fprintln(out, "  Signature: not verified (--allow-unsigned)")
+			}
 			if !onPath(a.HostIntegrator.BinPath()) {
 				fmt.Fprintf(out, "\nNote: %s is not on your PATH. Run `dz path setup` to configure your shell.\n", a.HostIntegrator.BinPath())
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&allowUnsigned, "allow-unsigned", false, "Install from a registry that has no cosign policy configured (or whose images have no signature). A registry with a policy that fails verification cannot be bypassed.")
+	return cmd
 }
 
 func (a *App) newListCommand() *cobra.Command {

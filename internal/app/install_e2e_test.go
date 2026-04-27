@@ -106,9 +106,11 @@ func TestInstallEndToEnd(t *testing.T) {
 		HostIntegrator:  integrator,
 		RegistryManager: regMgr,
 	}
-	a.PackageHandler = packagehandler.New(store, integrator, regMgr)
+	a.PackageHandler = packagehandler.New(store, integrator, regMgr, nil)
 
-	result, err := a.PackageHandler.InstallPackage(context.Background(), "tool")
+	// AllowUnsigned because the test image is unsigned and the fake
+	// registry has no policy. This exercises the no-policy + opt-in path.
+	result, err := a.PackageHandler.InstallPackage(context.Background(), "tool", packagehandler.InstallOptions{AllowUnsigned: true})
 	if err != nil {
 		// Dynamically-linked host binaries require their loader to be
 		// present inside the bundled rootfs. We only bundled the binary

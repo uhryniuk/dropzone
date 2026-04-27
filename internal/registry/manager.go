@@ -29,6 +29,13 @@ func NewManager(cfg *config.Config, save func() error, client *Client, cache *Ca
 	return &Manager{cfg: cfg, save: save, client: client, cache: cache}
 }
 
+// Client returns the underlying registry client. Exposed so callers like
+// packagehandler can drive Sigstore-bundle fetches that need the same
+// transport and auth as everything else; not part of the everyday surface.
+func (m *Manager) Client() *Client {
+	return m.client
+}
+
 // List returns a copy of all configured registries.
 func (m *Manager) List() []*Registry {
 	out := make([]*Registry, 0, len(m.cfg.Registries))
