@@ -252,3 +252,60 @@ func (s *LocalStore) RemovePackage(name string) error {
 	defer s.mu.Unlock()
 	return os.RemoveAll(s.PackageDir(name))
 }
+
+// ListDigestDirs returns every digest-directory name present under a
+// package, excluding the `current` symlink. Used by rollback (to find
+// the previous digest) and by doctor (to surface orphans).
+func (s *LocalStore) ListDigestDirs(name string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries, err := os.ReadDir(s.PackageDir(name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.Name() == "current" {
+			continue
+		}
+		if !e.IsDir() {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	return out, nil
+}
+
+// ListPackageNames returns every directory under packages/, regardless
+// of whether it has a current symlink. doctor() uses this to detect
+// orphaned package dirs.
+func (s *LocalStore) ListPackageNames() ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries, err := os.ReadDir(s.PackagesPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	return out, nil
+}
+
+// RemoveDigestDir removes a single digest directory under a package.
+// Used by doctor when reaping stale prior installs after a rollback
+// limit is exceeded; not exposed as a CLI directly.
+func (s *LocalStore) RemoveDigestDir(name, digestDirName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return os.RemoveAll(s.DigestDirPath(name, digestDirName))
+}

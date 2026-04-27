@@ -2,18 +2,29 @@ package app
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/uhryniuk/dropzone/internal/cosign"
 	"github.com/uhryniuk/dropzone/internal/hostintegration"
 	"github.com/uhryniuk/dropzone/internal/packagehandler"
+	"github.com/uhryniuk/dropzone/internal/registry"
 	"golang.org/x/term"
 )
+
+// writeJSON encodes v as indented JSON to out. Used by --json flags.
+func writeJSON(out io.Writer, v any) error {
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
 
 const version = "v0.0.1-dev"
 
@@ -48,8 +59,147 @@ func (a *App) SetupCommands() *cobra.Command {
 	rootCmd.AddCommand(a.newLoginCommand())
 	rootCmd.AddCommand(a.newLogoutCommand())
 	rootCmd.AddCommand(a.newPathCommand())
-
+	rootCmd.AddCommand(a.newRollbackCommand())
+	rootCmd.AddCommand(a.newDoctorCommand())
+	rootCmd.AddCommand(a.newPurgeCommand())
+	// Cobra ships shell completion as a built-in subcommand; enabling
+	// it just means not hiding it. Users get
+	// `dz completion bash > /etc/bash_completion.d/dz` etc. for free.
 	return rootCmd
+}
+
+func (a *App) newRollbackCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rollback <name>",
+		Short: "Restore a package's previous installation",
+		Long: `Flip a package's current symlink to its previous digest dir.
+Useful when an update breaks things and you want the old version back
+without re-pulling. Only works if a previous digest is still on disk
+(i.e., you haven't pruned).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			meta, err := a.PackageHandler.Rollback(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"Rolled %s back to %s (%s)\n",
+				args[0], meta.Tag, shortDigest(meta.Digest))
+			return nil
+		},
+	}
+}
+
+func (a *App) newDoctorCommand() *cobra.Command {
+	var fix bool
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Check dropzone state for inconsistencies",
+		Long: `Inspect ~/.dropzone for orphan wrappers, broken current symlinks,
+packages without wrappers, and PATH issues. Use --fix to apply the
+safe automatic remediations.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			report, err := a.PackageHandler.Doctor()
+			if err != nil {
+				return err
+			}
+			renderDoctorReport(cmd.OutOrStdout(), report)
+			if fix && report.HasIssues() {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nApplying safe fixes...")
+				report, err = a.PackageHandler.FixDoctor(report)
+				if err != nil {
+					return err
+				}
+				if report.HasIssues() {
+					fmt.Fprintln(cmd.OutOrStdout(), "Remaining issues after fixes:")
+					renderDoctorReport(cmd.OutOrStdout(), report)
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "All issues resolved.")
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&fix, "fix", false, "Apply automatic remediations for safe-to-fix issues")
+	return cmd
+}
+
+func renderDoctorReport(out io.Writer, r *packagehandler.DoctorReport) {
+	if !r.HasIssues() {
+		fmt.Fprintln(out, "Everything looks fine.")
+		return
+	}
+	if len(r.WrapperWithoutPackage) > 0 {
+		fmt.Fprintln(out, "Orphan wrappers (no matching package):")
+		for _, w := range r.WrapperWithoutPackage {
+			fmt.Fprintf(out, "  - ~/.dropzone/bin/%s\n", w)
+		}
+	}
+	if len(r.CurrentSymlinkBroken) > 0 {
+		fmt.Fprintln(out, "Broken `current` symlinks:")
+		for name, target := range r.CurrentSymlinkBroken {
+			fmt.Fprintf(out, "  - %s -> %s (target missing)\n", name, target)
+		}
+	}
+	if len(r.PackagesWithoutCurrent) > 0 {
+		fmt.Fprintln(out, "Packages with no current installation:")
+		for _, name := range r.PackagesWithoutCurrent {
+			fmt.Fprintf(out, "  - %s\n", name)
+		}
+	}
+	if len(r.PackageWithoutWrapper) > 0 {
+		fmt.Fprintln(out, "Packages with missing wrapper script:")
+		for _, name := range r.PackageWithoutWrapper {
+			fmt.Fprintf(out, "  - %s (re-install to regenerate)\n", name)
+		}
+	}
+	if r.PathNotConfigured {
+		fmt.Fprintln(out, "PATH:")
+		fmt.Fprintln(out, "  - ~/.dropzone/bin is not on $PATH (run `dz path setup`)")
+	}
+}
+
+func (a *App) newPurgeCommand() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "purge",
+		Short: "Wipe the entire ~/.dropzone directory",
+		Long: `Permanently delete ~/.dropzone, including config, packages,
+wrappers, and credentials. The directory is reconstructed on next run.
+Shell PATH edits made by 'dz path setup' are NOT removed; run
+'dz path unset' first if you want a clean teardown.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			base := a.Config.LocalStorePath
+			if !yes && !confirm(cmd, fmt.Sprintf("Delete %s entirely?", base)) {
+				fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
+				return nil
+			}
+			if err := removeDir(base); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Purged %s\n", base)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
+	return cmd
+}
+
+// removeDir wraps os.RemoveAll for the purge command. Pulled out so we
+// can swap to a "move to trash" implementation later if we want a
+// safer purge.
+func removeDir(path string) error {
+	return removeAll(path)
+}
+
+// removeAll is os.RemoveAll plus a guard against passing in something
+// suspicious. We refuse to nuke "/" or relative paths -- belt and
+// suspenders against a future bug or env quirk.
+func removeAll(path string) error {
+	if path == "" || path == "/" || !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("refusing to purge %q", path)
+	}
+	return os.RemoveAll(path)
 }
 
 func (a *App) newVersionCommand() *cobra.Command {
@@ -120,7 +270,8 @@ func (a *App) newInstallCommand() *cobra.Command {
 }
 
 func (a *App) newListCommand() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List installed packages",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -128,15 +279,56 @@ func (a *App) newListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), pkgs)
+			}
 			if len(pkgs) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "No packages installed.")
 				return nil
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tTAG\tDIGEST\tREGISTRY\tINSTALLED")
+			fmt.Fprintln(w, "NAME\tTAG\tDIGEST\tREGISTRY\tSIGNED\tINSTALLED")
 			for _, p := range pkgs {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					p.Name, p.Tag, shortDigest(p.Digest), p.Registry, p.InstalledAt.Format("2006-01-02 15:04"))
+				signed := "no"
+				if p.SignatureVerified {
+					signed = "yes"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					p.Name, p.Tag, shortDigest(p.Digest), p.Registry, signed, p.InstalledAt.Format("2006-01-02 15:04"))
+			}
+			return w.Flush()
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit machine-readable JSON instead of a table")
+	cmd.AddCommand(a.newListRegistriesCommand())
+	return cmd
+}
+
+func (a *App) newListRegistriesCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "registries",
+		Short: "List configured registries",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			regs := a.RegistryManager.List()
+			if len(regs) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "No registries configured.")
+				return nil
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tURL\tPOLICY\tDEFAULT")
+			for _, r := range regs {
+				policy := "none"
+				if r.CosignPolicy != nil {
+					policy = "custom"
+					if r.CosignPolicy.IdentityRegex == "https://github.com/chainguard-images/images/.*" {
+						policy = "chainguard"
+					}
+				}
+				def := ""
+				if r.Name == a.Config.DefaultRegistry {
+					def = "*"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, r.URL, policy, def)
 			}
 			return w.Flush()
 		},
@@ -144,7 +336,7 @@ func (a *App) newListCommand() *cobra.Command {
 }
 
 func (a *App) newRemoveCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove an installed package",
 		Args:  cobra.ExactArgs(1),
@@ -156,39 +348,288 @@ func (a *App) newRemoveCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(a.newRemoveRegistryCommand())
+	return cmd
+}
+
+func (a *App) newRemoveRegistryCommand() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "registry <name>",
+		Short: "Unregister an OCI registry",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			// Refuse if packages installed from this registry remain --
+			// removing the registry would leave them un-updateable.
+			pkgs, err := a.PackageHandler.ListInstalled()
+			if err != nil {
+				return err
+			}
+			var blocked []string
+			for _, p := range pkgs {
+				if p.Registry == name {
+					blocked = append(blocked, p.Name)
+				}
+			}
+			if len(blocked) > 0 && !force {
+				return fmt.Errorf(
+					"cannot remove registry %q: packages still installed from it (%s). Remove them first or pass --force",
+					name, strings.Join(blocked, ", "))
+			}
+
+			if err := a.RegistryManager.Remove(name); err != nil {
+				return err
+			}
+			// If removed registry was the default, drop the default
+			// pointer; user can pick a new one.
+			if a.Config.DefaultRegistry == name {
+				a.Config.DefaultRegistry = ""
+				if err := a.Config.Save(a.ConfigPath); err != nil {
+					return fmt.Errorf("clear default-registry pointer: %w", err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "Note: removed registry was the default; set a new default with `dz add registry --default` or by editing config.")
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed registry %q\n", name)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "Remove even if installed packages reference this registry")
+	return cmd
 }
 
 func (a *App) newUpdateCommand() *cobra.Command {
-	return &cobra.Command{
+	var (
+		checkOnly     bool
+		yes           bool
+		all           bool
+		allowUnsigned bool
+	)
+	cmd := &cobra.Command{
 		Use:   "update [<name>]",
 		Short: "Check installed packages against their source registries",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Query each installed package's source registry for digest drift
+(same tag, new digest -- typically a CVE-patch rebuild) and newer tags.
+Without arguments, scans all installed packages and prints a status
+table. With a name, scans just that package and prompts to apply.
+
+  dz update                check all, print status
+  dz update --check        same; explicit "do not apply"
+  dz update <name>         check name; prompt to apply if drift seen
+  dz update --all          apply all available updates after one prompt
+  dz update <name> --yes   apply without prompting`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotReimplemented
+			ctx := cmd.Context()
+			out := cmd.OutOrStdout()
+
+			var infos []packagehandler.UpdateInfo
+			if len(args) == 1 && !all {
+				info, err := a.PackageHandler.CheckUpdate(ctx, args[0])
+				if err != nil {
+					return err
+				}
+				infos = []packagehandler.UpdateInfo{info}
+			} else {
+				var err error
+				infos, err = a.PackageHandler.CheckUpdates(ctx)
+				if err != nil {
+					return err
+				}
+			}
+
+			renderUpdateTable(out, infos)
+
+			// Pure-check mode, or nothing to apply.
+			anyAvailable := false
+			for _, u := range infos {
+				if u.HasUpdate() {
+					anyAvailable = true
+					break
+				}
+			}
+			if checkOnly || !anyAvailable {
+				return nil
+			}
+
+			// Decide which to apply.
+			toApply := infos
+			if !all && len(args) == 1 {
+				// Single named package; apply just it.
+				toApply = []packagehandler.UpdateInfo{infos[0]}
+			}
+
+			applicable := []packagehandler.UpdateInfo{}
+			for _, u := range toApply {
+				if u.HasUpdate() {
+					applicable = append(applicable, u)
+				}
+			}
+			if len(applicable) == 0 {
+				return nil
+			}
+			if !yes && !confirm(cmd, fmt.Sprintf("Apply %d update(s)?", len(applicable))) {
+				fmt.Fprintln(out, "Aborted.")
+				return nil
+			}
+
+			opts := packagehandler.InstallOptions{AllowUnsigned: allowUnsigned}
+			for _, u := range applicable {
+				targetTag := u.InstalledTag
+				if u.SameTagRebuild() {
+					// Same tag, new digest: re-install the same tag and
+					// the registry will resolve to the new digest.
+				} else if len(u.NewerTags) > 0 {
+					// Newer tag: pick the lexicographically-greatest
+					// available. Users wanting a specific tag can use
+					// `dz install <name>:<tag>` directly.
+					targetTag = u.NewerTags[len(u.NewerTags)-1]
+				}
+				fmt.Fprintf(out, "\nUpdating %s -> %s...\n", u.Name, targetTag)
+				if _, err := a.PackageHandler.ApplyUpdate(ctx, u.Name, targetTag, opts); err != nil {
+					fmt.Fprintf(out, "  failed: %v\n", err)
+					continue
+				}
+				fmt.Fprintf(out, "  ok\n")
+			}
+			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "Report status only; do not apply any updates")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip confirmation prompts")
+	cmd.Flags().BoolVar(&all, "all", false, "Apply all available updates")
+	cmd.Flags().BoolVar(&allowUnsigned, "allow-unsigned", false, "Allow installs from registries with no cosign policy")
+	return cmd
+}
+
+func renderUpdateTable(out io.Writer, infos []packagehandler.UpdateInfo) {
+	if len(infos) == 0 {
+		fmt.Fprintln(out, "No packages installed.")
+		return
+	}
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tINSTALLED\tAVAILABLE\tREASON")
+	for _, u := range infos {
+		installed := u.InstalledTag + " (" + shortDigest(u.InstalledDigest) + ")"
+		switch {
+		case u.UnreachableError != nil:
+			fmt.Fprintf(w, "%s\t%s\t<unreachable>\t%v\n", u.Name, installed, u.UnreachableError)
+		case u.SameTagRebuild():
+			avail := u.InstalledTag + " (" + shortDigest(u.CurrentDigest) + ")"
+			extras := ""
+			if len(u.NewerTags) > 0 {
+				extras = fmt.Sprintf(", newer tags: %s", strings.Join(u.NewerTags, ", "))
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\tsame-tag rebuild%s\n", u.Name, installed, avail, extras)
+		case len(u.NewerTags) > 0:
+			fmt.Fprintf(w, "%s\t%s\t%s\tnewer tag\n", u.Name, installed, strings.Join(u.NewerTags, ", "))
+		default:
+			fmt.Fprintf(w, "%s\t%s\tup to date\t-\n", u.Name, installed)
+		}
+	}
+	w.Flush()
+}
+
+// confirm prompts the user with msg [y/N]; returns true on "y"/"yes".
+// Used for one-shot confirmations on update/rollback paths.
+func confirm(cmd *cobra.Command, msg string) bool {
+	fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N]: ", msg)
+	r := bufio.NewReader(cmd.InOrStdin())
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
 }
 
 func (a *App) newSearchCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "search [<term>]",
+	var registryName string
+	cmd := &cobra.Command{
+		Use:   "search [<term>] [--registry <name>]",
 		Short: "List images available in a registry",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `List repositories advertised by a registry's /v2/_catalog endpoint.
+Many registries (Docker Hub, GHCR) disable the catalog endpoint; in
+those cases search will fail cleanly and you can use 'dz tags <image>'
+for a known image instead.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotReimplemented
+			term := ""
+			if len(args) == 1 {
+				term = args[0]
+			}
+			if registryName == "" {
+				registryName = a.Config.DefaultRegistry
+			}
+			names, err := a.RegistryManager.Catalog(cmd.Context(), registryName, false)
+			if err != nil {
+				if errors.Is(err, registry.ErrCatalogUnavailable) {
+					fmt.Fprintf(cmd.OutOrStdout(),
+						"Registry %q does not expose /v2/_catalog. Use `dz tags <image>` to list tags for a specific image.\n",
+						registryName)
+					return nil
+				}
+				return err
+			}
+			out := cmd.OutOrStdout()
+			matched := 0
+			for _, n := range names {
+				if term == "" || strings.Contains(n, term) {
+					fmt.Fprintln(out, n)
+					matched++
+				}
+			}
+			if term != "" && matched == 0 {
+				fmt.Fprintf(out, "No images matched %q in registry %q.\n", term, registryName)
+			}
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&registryName, "registry", "", "Registry to search (default: configured default_registry)")
+	return cmd
 }
 
 func (a *App) newTagsCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "tags <image>",
+	var registryName string
+	cmd := &cobra.Command{
+		Use:   "tags <image> [--registry <name>]",
 		Short: "List available tags for an image",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotReimplemented
+			image := args[0]
+			// Allow either a short image name (resolved against the
+			// chosen/default registry) or a "<registry>/<image>" form.
+			// We don't need full Resolve semantics here; tags don't take
+			// a tag suffix.
+			if registryName == "" {
+				if i := strings.Index(image, "/"); i > 0 {
+					if _, err := a.RegistryManager.Get(image[:i]); err == nil {
+						registryName = image[:i]
+						image = image[i+1:]
+					}
+				}
+				if registryName == "" {
+					registryName = a.Config.DefaultRegistry
+				}
+			}
+			tags, err := a.RegistryManager.Tags(cmd.Context(), registryName, image, false)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if len(tags) == 0 {
+				fmt.Fprintf(out, "No tags for %s in registry %q.\n", image, registryName)
+				return nil
+			}
+			for _, t := range tags {
+				fmt.Fprintln(out, t)
+			}
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&registryName, "registry", "", "Registry to query (default: configured default_registry, or registry inferred from image prefix)")
+	return cmd
 }
 
 func (a *App) newAddCommand() *cobra.Command {
@@ -196,15 +637,115 @@ func (a *App) newAddCommand() *cobra.Command {
 		Use:   "add",
 		Short: "Add resources (registries)",
 	}
-	cmd.AddCommand(&cobra.Command{
+	cmd.AddCommand(a.newAddRegistryCommand())
+	return cmd
+}
+
+func (a *App) newAddRegistryCommand() *cobra.Command {
+	var (
+		template       string
+		identityIssuer string
+		identityRegex  string
+		makeDefault    bool
+	)
+	cmd := &cobra.Command{
 		Use:   "registry <name> <url>",
 		Short: "Register an OCI registry as a package source",
-		Args:  cobra.ExactArgs(2),
+		Long: `Register an OCI registry. URL can be a host ("docker.io") or a
+namespace path ("cgr.dev/chainguard"). Use --template for one of the
+common signing providers, or --identity-issuer + --identity-regex for
+a custom cosign keyless policy. A registry without a policy will
+require --allow-unsigned at install time.
+
+Templates:
+  chainguard  fully-formed policy for cgr.dev's build pipeline
+  github      Issuer pinned to GitHub Actions; supply --identity-regex
+  gitlab      Issuer pinned to GitLab; supply --identity-regex
+  google      Issuer pinned to Google OIDC; supply --identity-regex
+
+Examples:
+  dz add registry mycorp registry.mycorp.example/hardened \\
+      --template github --identity-regex 'https://github.com/mycorp/.*'
+  dz add registry hub-mirror docker.io --default`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotReimplemented
+			name, url := args[0], args[1]
+
+			r := registry.Registry{Name: name, URL: url}
+
+			// Build cosign policy if any signature-related flag was given.
+			havePolicyArgs := template != "" || identityIssuer != "" || identityRegex != ""
+			if havePolicyArgs {
+				p, err := buildPolicy(template, identityIssuer, identityRegex)
+				if err != nil {
+					return err
+				}
+				if p != nil {
+					r.CosignPolicy = &registry.CosignPolicy{
+						Issuer:        p.Issuer,
+						IdentityRegex: p.IdentityRegex,
+					}
+				}
+			}
+
+			if err := a.RegistryManager.Add(r); err != nil {
+				return err
+			}
+			if makeDefault {
+				a.Config.DefaultRegistry = name
+				if err := a.Config.Save(a.ConfigPath); err != nil {
+					return fmt.Errorf("save default-registry change: %w", err)
+				}
+			}
+
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "Added registry %q -> %s", name, url)
+			if r.CosignPolicy != nil {
+				fmt.Fprintf(out, " (signed)")
+			} else {
+				fmt.Fprintf(out, " (unsigned, requires --allow-unsigned at install)")
+			}
+			fmt.Fprintln(out)
+			if makeDefault {
+				fmt.Fprintf(out, "Set %q as the default registry.\n", name)
+			}
+			return nil
 		},
-	})
+	}
+	cmd.Flags().StringVar(&template, "template", "", "Pre-baked policy: chainguard, github, gitlab, google")
+	cmd.Flags().StringVar(&identityIssuer, "identity-issuer", "", "OIDC issuer URL for the cosign policy")
+	cmd.Flags().StringVar(&identityRegex, "identity-regex", "", "Regular expression matching the signing identity SAN")
+	cmd.Flags().BoolVar(&makeDefault, "default", false, "Also set this registry as the default")
 	return cmd
+}
+
+// buildPolicy assembles a cosign.Policy from template + override flags.
+// Template provides defaults; identity-issuer / identity-regex override
+// or fill in. Returns (nil, nil) when no policy fields were given (the
+// caller treats that as "no policy").
+func buildPolicy(template, issuer, regex string) (*cosign.Policy, error) {
+	var p cosign.Policy
+	if template != "" {
+		t, err := cosign.ApplyTemplate(template)
+		if err != nil {
+			return nil, err
+		}
+		p = t
+	}
+	if issuer != "" {
+		p.Issuer = issuer
+	}
+	if regex != "" {
+		p.IdentityRegex = regex
+	}
+	if p.Issuer == "" && p.IdentityRegex == "" {
+		return nil, nil
+	}
+	if err := p.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid policy (template=%q, issuer=%q, identity_regex=%q): %w",
+			template, issuer, regex, err)
+	}
+	return &p, nil
 }
 
 func (a *App) newLoginCommand() *cobra.Command {

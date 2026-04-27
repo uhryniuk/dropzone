@@ -30,38 +30,11 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-// Commands still awaiting real implementations should return the
-// not-reimplemented sentinel. Install/list/remove have real behavior now
-// (phase 3) so they're intentionally excluded here.
-func TestStubCommandsReturnNotReimplemented(t *testing.T) {
-	cases := [][]string{
-		{"update"},
-		{"search"},
-		{"tags", "foo"},
-		{"add", "registry", "n", "u"},
-	}
-
-	for _, args := range cases {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			a := New()
-			root := a.SetupCommands()
-			var out bytes.Buffer
-			root.SetOut(&out)
-			root.SetErr(&out)
-			root.SetArgs(args)
-
-			// These commands hit PersistentPreRunE (which calls Initialize) before
-			// returning the stub error. Initialize writes under $HOME, so point it
-			// at a temp dir to keep the test hermetic.
-			t.Setenv("HOME", t.TempDir())
-
-			err := root.Execute()
-			if err == nil {
-				t.Fatalf("%v: expected an error, got nil", args)
-			}
-			if !strings.Contains(err.Error(), "not yet reimplemented") {
-				t.Fatalf("%v: want not-reimplemented error, got %v", args, err)
-			}
-		})
-	}
-}
+// All commands have real implementations as of phase 8 -- there's
+// nothing left to gate on the not-reimplemented sentinel. The CLI
+// surface is exercised by command-specific tests:
+//   - install:    install_e2e_test.go
+//   - login/out:  login_test.go
+//   - registries: cli_registries_test.go
+//   - update:     cli_update_test.go
+// Plus per-package unit tests for the underlying logic.
