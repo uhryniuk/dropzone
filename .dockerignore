@@ -1,0 +1,20 @@
+# Cut the build context. The build only needs Go sources + go.mod/sum.
+.git/
+.github/
+.idea/
+.vscode/
+
+# Local-only files that exist in the worktree but shouldn't ship in
+# the build context.
+CHECKPOINT.md
+SCRATCH.md
+dz
+dropzone
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# OS junk
+.DS_Store
