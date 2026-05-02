@@ -127,12 +127,12 @@ func TestGenerateWrapperUnsupportedOS(t *testing.T) {
 
 func TestShellEscape(t *testing.T) {
 	cases := map[string]string{
-		"plain":              "'plain'",
-		"with space":         "'with space'",
-		"it's":               `'it'\''s'`,
-		`$HOME`:              "'$HOME'",
-		``:                   "''",
-		`multi'quote'dance`:  `'multi'\''quote'\''dance'`,
+		"plain":             "'plain'",
+		"with space":        "'with space'",
+		"it's":              `'it'\''s'`,
+		`$HOME`:             "'$HOME'",
+		``:                  "''",
+		`multi'quote'dance`: `'multi'\''quote'\''dance'`,
 	}
 	for in, want := range cases {
 		got := shellEscape(in)

@@ -12,11 +12,11 @@ import (
 // what's inside. Anything we don't recognize is silently ignored — Phase
 // 5 is about surfacing the common cases, not exhaustive parsing.
 const (
-	predicateSPDX        = "https://spdx.dev/Document"
-	predicateCycloneDX   = "https://cyclonedx.org/bom"
-	predicateSLSAv1      = "https://slsa.dev/provenance/v1"
-	predicateSLSAv02     = "https://slsa.dev/provenance/v0.2"
-	predicateVuln        = "https://cosign.sigstore.dev/attestation/vuln/v1"
+	predicateSPDX      = "https://spdx.dev/Document"
+	predicateCycloneDX = "https://cyclonedx.org/bom"
+	predicateSLSAv1    = "https://slsa.dev/provenance/v1"
+	predicateSLSAv02   = "https://slsa.dev/provenance/v0.2"
+	predicateVuln      = "https://cosign.sigstore.dev/attestation/vuln/v1"
 )
 
 // RawAttestation is a single in-toto Statement extracted from a DSSE

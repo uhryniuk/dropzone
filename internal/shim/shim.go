@@ -3,15 +3,15 @@
 //
 // The pipeline is intentionally minimal:
 //
-//   1. Validate the image's Entrypoint[0] is an ELF (Linux) or Mach-O
-//      (macOS) matching the host CPU architecture. Reject shell-script
-//      entrypoints and cross-platform binaries at this layer so failures
-//      surface before we touch persistent state.
-//   2. Read the dynamic loader path out of the binary's PT_INTERP on
-//      Linux. macOS uses the system dyld, so no loader lookup is needed.
-//   3. Generate a POSIX wrapper script that invokes the entrypoint from
-//      inside the bundled rootfs with library-search env vars pointing at
-//      the rootfs's lib directories.
+//  1. Validate the image's Entrypoint[0] is an ELF (Linux) or Mach-O
+//     (macOS) matching the host CPU architecture. Reject shell-script
+//     entrypoints and cross-platform binaries at this layer so failures
+//     surface before we touch persistent state.
+//  2. Read the dynamic loader path out of the binary's PT_INTERP on
+//     Linux. macOS uses the system dyld, so no loader lookup is needed.
+//  3. Generate a POSIX wrapper script that invokes the entrypoint from
+//     inside the bundled rootfs with library-search env vars pointing at
+//     the rootfs's lib directories.
 //
 // The binary itself is never modified. No patchelf, no ELF rewriting.
 // Signatures on the binary (relevant on macOS) stay valid because we only

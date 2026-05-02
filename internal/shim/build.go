@@ -45,19 +45,19 @@ type BuildInput struct {
 //
 // The flow, with partial-failure cleanup:
 //
-//   1. Validate the staging rootfs has a usable entrypoint. If not,
-//      nothing persistent happens and the staging dir is left for the
-//      caller to remove.
-//   2. Detect the dynamic loader (Linux only).
-//   3. Generate wrapper content in memory.
-//   4. Move the staging rootfs to packages/<name>/<digest>/rootfs/.
-//      This is a rename — atomic when staging and destination are on the
-//      same filesystem, which they are by construction (both under the
-//      local store path).
+//  1. Validate the staging rootfs has a usable entrypoint. If not,
+//     nothing persistent happens and the staging dir is left for the
+//     caller to remove.
+//  2. Detect the dynamic loader (Linux only).
+//  3. Generate wrapper content in memory.
+//  4. Move the staging rootfs to packages/<name>/<digest>/rootfs/.
+//     This is a rename — atomic when staging and destination are on the
+//     same filesystem, which they are by construction (both under the
+//     local store path).
 //
 // At that point the on-disk state is:
 //
-//   ~/.dropzone/packages/<name>/<digest>/rootfs/...
+//	~/.dropzone/packages/<name>/<digest>/rootfs/...
 //
 // Callers (packagehandler) write the wrapper, write metadata.json, and
 // flip the `current` symlink. We don't do those here because they're

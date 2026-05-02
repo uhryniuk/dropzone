@@ -192,4 +192,3 @@ func TestClientDigestRead(t *testing.T) {
 		t.Errorf("digest: got %q, want %q", got, wantDigest)
 	}
 }
-

@@ -106,7 +106,7 @@ func generateDarwinWrapper(in WrapperInput) string {
 }
 
 // shellEscape wraps s in single quotes for safe use in a POSIX shell
-// command, handling embedded single quotes via the standard '\'' dance.
+// command, handling embedded single quotes via the standard '\” dance.
 func shellEscape(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

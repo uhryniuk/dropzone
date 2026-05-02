@@ -75,18 +75,18 @@ func TestCosignSidecarPatternBoundaries(t *testing.T) {
 	// Boundary tests for the regex. False positives here would silence
 	// real tags; false negatives would let cosign noise through.
 	cases := map[string]bool{
-		"sha256-" + repeat("a", 64):                  true, // bare digest tag
-		"sha256-" + repeat("a", 64) + ".sig":         true, // signature
-		"sha256-" + repeat("0", 64) + ".att":         true, // attestation
-		"sha256-" + repeat("f", 64) + ".sbom":        true, // SBOM
-		"sha256-" + repeat("a", 63):                  false, // 63 hex chars, not 64
-		"sha256-" + repeat("a", 65):                  false, // 65 hex chars
-		"sha256-" + repeat("g", 64):                  false, // non-hex
-		"sha512-" + repeat("a", 64):                  false, // wrong algorithm prefix
-		"sha256-something":                           false, // not the pattern
-		"v1.0":                                       false, // real semver tag
-		"1.0":                                        false, // real semver tag
-		"latest":                                     false, // floating tag
+		"sha256-" + repeat("a", 64):           true,  // bare digest tag
+		"sha256-" + repeat("a", 64) + ".sig":  true,  // signature
+		"sha256-" + repeat("0", 64) + ".att":  true,  // attestation
+		"sha256-" + repeat("f", 64) + ".sbom": true,  // SBOM
+		"sha256-" + repeat("a", 63):           false, // 63 hex chars, not 64
+		"sha256-" + repeat("a", 65):           false, // 65 hex chars
+		"sha256-" + repeat("g", 64):           false, // non-hex
+		"sha512-" + repeat("a", 64):           false, // wrong algorithm prefix
+		"sha256-something":                    false, // not the pattern
+		"v1.0":                                false, // real semver tag
+		"1.0":                                 false, // real semver tag
+		"latest":                              false, // floating tag
 	}
 	for in, want := range cases {
 		got := cosignSidecarTagPattern.MatchString(in)

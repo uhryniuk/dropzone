@@ -25,11 +25,11 @@ var ErrAlreadyInstalled = errors.New("package already installed at this digest")
 // PackageHandler orchestrates install, remove, and list. The phases it
 // composes are:
 //
-//   registry.Manager  (pull + platform select)         [phase 1-2]
-//   cosign.Verifier   (signature + policy)             [phase 4]
-//   shim.Build        (validate + stage + wrapper)     [phase 3]
-//   localstore        (persistent state)               [phase 3]
-//   hostintegration   (wrapper file + bin dir)         [phase 3]
+//	registry.Manager  (pull + platform select)         [phase 1-2]
+//	cosign.Verifier   (signature + policy)             [phase 4]
+//	shim.Build        (validate + stage + wrapper)     [phase 3]
+//	localstore        (persistent state)               [phase 3]
+//	hostintegration   (wrapper file + bin dir)         [phase 3]
 //
 // Attestation fetch (SBOM/SLSA/vuln) lands after verification in phase 5.
 type PackageHandler struct {

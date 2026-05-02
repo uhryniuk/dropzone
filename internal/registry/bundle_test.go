@@ -126,8 +126,8 @@ func TestIsSigstoreBundleMediaType(t *testing.T) {
 		"application/vnd.dev.sigstore.bundle.v0.3+json": true,
 		"application/vnd.dev.sigstore.bundle.v0.4+json": true,
 		"application/vnd.dev.cosignproject.v0.1+json":   false,
-		"":                              false,
-		"application/octet-stream":      false,
+		"":                         false,
+		"application/octet-stream": false,
 	}
 	for in, want := range cases {
 		if got := isSigstoreBundleMediaType(in); got != want {
